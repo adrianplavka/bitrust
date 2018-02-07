@@ -4,18 +4,20 @@
 pub mod bencode {
     use std::collections::HashMap;
 
-    const NUM_DELIMITER: char = 'i';
-    const DICT_DELIMITER: char = 'd';
-    const LIST_DELIMITER: char = 'l';
-    const DELIMITER: char = 'e';
+    const NUM_DELIMITER: char   = 'i';
+    const DICT_DELIMITER: char  = 'd';
+    const LIST_DELIMITER: char  = 'l';
+    const END_DELIMITER: char   = 'e';
+
+    pub type Bytes = Vec<u8>;
 
     #[derive(Debug, PartialEq)]
     pub enum Type {
         None,
         Num(f64),
-        Str(Vec<u8>),
+        Str(Bytes),
         List(Vec<Type>),
-        Dict(HashMap<Vec<u8>, Type>)
+        Dict(HashMap<Bytes, Type>)
     }
 
     #[derive(Debug, PartialEq)]
@@ -27,15 +29,15 @@ pub mod bencode {
         AtDict
     }
 
+    #[derive(Debug)]
     pub struct Parser {
         pos: u64,
-        state: ParseState,
-        data: P
+        state: ParseState
     }
 
     impl Parser {
-        pub fn decode(data: &str) {
-
+        pub fn decode(data: &str) -> Type {
+            Type::None
         }
     }
 }
@@ -43,8 +45,7 @@ pub mod bencode {
 #[cfg(test)]
 mod tests {
     extern crate test;
-    use super::bencode::Parser;
-    use super::bencode::Type;
+    use super::bencode::{Parser, Type};
 
     #[test]
     fn parse_numbers() {
