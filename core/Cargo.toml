@@ -1,0 +1,7 @@
+
+[package]
+name = "rbit_core"
+version = "0.1.0"
+authors = ["Adrian Plavka"]
+
+[dependencies]
