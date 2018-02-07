@@ -1,0 +1,8 @@
+[[package]]
+name = "rbit_bencode"
+version = "0.1.0"
+
+[[package]]
+name = "rbit_core"
+version = "0.1.0"
+
