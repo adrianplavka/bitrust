@@ -1,6 +1,6 @@
 
 [package]
-name = "rbit_bencode"
+name = "bitrust_bencode"
 version = "0.1.0"
 authors = ["Adrian Plavka"]
 

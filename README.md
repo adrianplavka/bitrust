@@ -1,5 +1,5 @@
 
-# RBIT
+# Bitrust
 ## BitTorrent implementation in Rust.
 
 >**_WORK IN PROGRESS_**
