@@ -6,8 +6,17 @@ pub mod bencode {
     use std::collections::HashMap;
     use std::io::Read;
 
+    const NUM_DELIMITER: char   = 'i';
+    const DICT_DELIMITER: char  = 'd';
+    const LIST_DELIMITER: char  = 'l';
+    const END_DELIMITER: char   = 'e';
+    const COL_DELIMITER: char   = ':';
+
     #[derive(Debug, PartialEq)]
     pub enum Error {
+        Invalid,
+        UnexpectedSymbol,
+        UnexpectedEnd,
         Unknown
     }
 
@@ -15,27 +24,22 @@ pub mod bencode {
 
     pub type Bytes = Vec<u8>;
 
-    const NUM_DELIMITER: char   = 'i';
-    const DICT_DELIMITER: char  = 'd';
-    const LIST_DELIMITER: char  = 'l';
-    const END_DELIMITER: char   = 'e';
-
     #[derive(Debug, PartialEq)]
     pub enum Type {
-        None,
-        Num(f64),
+        Num(i64),
         Str(Bytes),
         List(Vec<Type>),
-        Dict(HashMap<Bytes, Type>)
+        Dict(HashMap<Bytes, Type>),
+        None
     }
 
     #[derive(Debug, PartialEq)]
     enum ParseState {
-        None,
         AtNum,
         AtStr,
         AtList,
-        AtDict
+        AtDict,
+        None
     }
 
     #[derive(Debug)]
@@ -57,10 +61,11 @@ pub mod bencode {
 
 #[cfg(test)]
 mod tests {
+    extern crate test;
+
     use std;
     use std::fs::File;
-    extern crate test;
-    use super::bencode::{Parser, Type, Error};
+    use ::bencode::{Parser, Type, Error};
 
     /*
         "Integers are represented by an 'i' followed by the number in base 10 followed by an 'e'. 
@@ -74,11 +79,11 @@ mod tests {
     */
     #[test]
     fn parse_num() {
-        assert_eq!(Parser::decode_str("i0e").unwrap(), Type::Num(0.0));
-        assert_eq!(Parser::decode_str("i-1e").unwrap(), Type::Num(-1.0));
-        assert_eq!(Parser::decode_str("i28e").unwrap(), Type::Num(28.0));
-        assert_eq!(Parser::decode_str("i489e").unwrap(), Type::Num(489.0));
-        assert_eq!(Parser::decode_str("i981795470e").unwrap(), Type::Num(981795470.0));
+        assert_eq!(Parser::decode_str("i0e").unwrap(), Type::Num(0));
+        assert_eq!(Parser::decode_str("i-1e").unwrap(), Type::Num(-1));
+        assert_eq!(Parser::decode_str("i28e").unwrap(), Type::Num(28));
+        assert_eq!(Parser::decode_str("i489e").unwrap(), Type::Num(489));
+        assert_eq!(Parser::decode_str("i981795470e").unwrap(), Type::Num(981795470));
 
         assert_eq!(Parser::decode_str("i-0e").unwrap_err(), Error::Unknown);
         assert_eq!(Parser::decode_str("i098e").unwrap_err(), Error::Unknown);
