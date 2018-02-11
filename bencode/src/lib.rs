@@ -124,6 +124,12 @@ mod tests {
     fn parse_dict() {
         unimplemented!();
     }
+}
+
+#[cfg(test)]
+mod bench {
+    extern crate test;
+    use ::bencode::{Parser};
 
     #[bench]
     fn bench_parse_num(b: &mut test::Bencher) {
