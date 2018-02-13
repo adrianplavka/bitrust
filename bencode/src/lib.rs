@@ -85,8 +85,8 @@ mod tests {
         assert_eq!(Parser::decode_str("i489e").unwrap(), Type::Num(489));
         assert_eq!(Parser::decode_str("i981795470e").unwrap(), Type::Num(981795470));
 
-        assert_eq!(Parser::decode_str("i-0e").unwrap_err(), Error::Unknown);
-        assert_eq!(Parser::decode_str("i098e").unwrap_err(), Error::Unknown);
+        assert_eq!(Parser::decode_str("i-0e").unwrap_err(), Error::Invalid);
+        assert_eq!(Parser::decode_str("i098e").unwrap_err(), Error::Invalid);
     }
 
     /*
