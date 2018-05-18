@@ -3,8 +3,6 @@
 
 pub mod bencode {
     use std;
-    use std::collections::HashMap;
-    use std::io::Read;
 
     const NUM_DELIMITER: char   = 'i';
     const DICT_DELIMITER: char  = 'd';
@@ -17,19 +15,21 @@ pub mod bencode {
         Invalid,
         UnexpectedSymbol,
         UnexpectedEnd,
+        UnsupportedType,
         Unknown
     }
 
     pub type Result<T> = std::result::Result<T, Error>;
 
-    pub type Bytes = Vec<u8>;
+    #[derive(Debug, PartialEq, Eq, Hash)]
+    pub struct Bytes(Vec<u8>);
 
     #[derive(Debug, PartialEq)]
     pub enum Type {
         Num(i64),
         Str(Bytes),
         List(Vec<Type>),
-        Dict(HashMap<Bytes, Type>),
+        Dict(std::collections::HashMap<Bytes, Type>),
         None
     }
 
@@ -53,14 +53,14 @@ pub mod bencode {
             unimplemented!()
         }
 
-        pub fn decode_from<R>(reader: R) -> () where R: Read {
+        pub fn decode_from<R>(reader: R) -> Result<Type> where R: std::io::Read {
             unimplemented!()
         }
     }
 }
 
 #[cfg(test)]
-mod tests {
+mod test {
     extern crate test;
 
     use std;
