@@ -9,7 +9,7 @@
 pub mod bencode {
     use std;
     use std::result::{Result};
-    use std::io::{Read};
+    use std::io::{Read, BufRead};
 
     pub fn decode(data: &str) -> Result<Value, DecodeError> {
         // TODO: Make use of decode functions.
@@ -30,12 +30,9 @@ pub mod bencode {
         ParseError,
         Unknown
     }
-
-    #[derive(Debug, PartialEq, Eq, Hash)]
-    pub struct Byte(u8);
     
     #[derive(Debug, PartialEq, Eq, Hash)]
-    pub struct Bytes(Vec<Byte>);
+    pub struct Bytes(Vec<u8>);
 
     #[derive(Debug, PartialEq)]
     pub enum Value {
@@ -104,7 +101,6 @@ pub mod bencode {
             // Error represents something, in which the parsing failed somehow.
             // Keep an index of the current loop iteration for logic regarding the '0' or '-' character.
             let mut buffer = String::new();
-            let mut error: Option<DecodeError> = None;
             let mut i = 0;
             loop {
                 let byte = self.read_byte()?;
@@ -117,8 +113,7 @@ pub mod bencode {
                     b'0' => {
                         let next = self.peek_byte()?;
                         if next != b'e' && i == 0 {
-                            error = Some(DecodeError::ParseError);
-                            break;
+                            return Err(DecodeError::ParseError);
                         } else {
                             buffer.push(byte as char);
                         }
@@ -128,8 +123,7 @@ pub mod bencode {
                     b'-' => {
                         let next = self.peek_byte()?;
                         if i != 0 || next == b'0' {
-                            error = Some(DecodeError::ParseError);
-                            break;
+                            return Err(DecodeError::ParseError);
                         } else {
                             buffer.push(byte as char);
                         }
@@ -140,8 +134,7 @@ pub mod bencode {
                     },
                     // Default case, when something hadn't been covered.
                     _ => {
-                        error = Some(DecodeError::ParseError);
-                        break;
+                        return Err(DecodeError::ParseError);
                     }
                 }
 
@@ -149,10 +142,40 @@ pub mod bencode {
             }
 
             // Parse the buffer into an integer & return it, only if no error occured.
-            match (buffer.parse(), error) {
-                (Ok(v), None) => Ok(Value::Int(v)),
+            match buffer.parse() {
+                Ok(v) => Ok(Value::Int(v)),
                 _ => Err(DecodeError::ParseError)
             }
+        }
+
+        fn decode_str(&mut self) -> Result<Value, DecodeError> {
+            // Extract the length of the buffer from the string value.
+            let mut buffer_len = String::new();            
+            loop {
+                let byte = self.read_byte()?;
+
+                match byte {
+                    // Push any number into the buffer length.
+                    b'0'...b'9' => buffer_len.push(byte as char),
+                    // The ending delimiter of the buffer length.
+                    b':' => { break; },
+                    // If none matched, return an EOF.
+                    _ => { return Err(DecodeError::EOF) }
+                }
+            }
+
+            // Parse the length of bytes into a number.
+            let length: usize;
+            match buffer_len.parse() {
+                Ok(l) => length = l,
+                _ => { return Err(DecodeError::ParseError) }
+            };
+
+            // Construct a buffer & read until the length of the buffer.
+            let mut buffer: Vec<u8> = vec![0u8; length];
+            self.read(&mut buffer[..])?;
+
+            Ok(Value::Str(Bytes(buffer.to_vec())))
         }
     }
 
@@ -162,7 +185,7 @@ pub mod bencode {
         extern crate test;
 
         use std;
-        use bencode::{Decoder, DecodeError, Value};
+        use bencode::{Decoder, DecodeError, Value, Bytes};
 
         /*
             Tests the reading, advancing & peeking of data.
@@ -230,9 +253,12 @@ pub mod bencode {
             Source: http://www.bittorrent.org/beps/bep_0003.html
         */
         #[test]
-        #[ignore]
         fn decode_str() {
-            unimplemented!();
+            assert_eq!(Decoder::new("4:asdf").decode_str().unwrap(), Value::Str(Bytes("asdf".as_bytes().to_vec())));
+            assert_eq!(Decoder::new("7:bencode").decode_str().unwrap(), Value::Str(Bytes("bencode".as_bytes().to_vec())));
+
+            assert_eq!(Decoder::new("4asdf").decode_str().unwrap_err(), DecodeError::EOF);
+            assert_eq!(Decoder::new("10:aa").decode_str().unwrap_err(), DecodeError::EOF);
         }
 
         /*
