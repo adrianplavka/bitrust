@@ -82,6 +82,78 @@ pub mod bencode {
             self.data.set_position(pos - 1);
             Ok(data)
         }
+
+        // Reads & advance one byte, with expectation.
+        fn expect_byte(&mut self, expect: u8) -> Result<(), DecodeError> {
+            let byte = self.read_byte()?;
+
+            if byte == expect {
+                Ok(())
+            } else {
+                Err(DecodeError::UnexpectedSymbol)
+            }
+        }
+
+        // Decodes an integer of the cursor's current position.
+        // The position points to the 'i' character.
+        fn decode_int(&mut self) -> Result<Value, DecodeError> {
+            // Expect the first byte to represent an 'i' character.
+            self.expect_byte('i' as u8)?;
+
+            // Construct a buffer, from which we will parse the bytes into a number.
+            // Error represents something, in which the parsing failed somehow.
+            // Keep an index of the current loop iteration for logic regarding the '0' or '-' character.
+            let mut buffer = String::new();
+            let mut error: Option<DecodeError> = None;
+            let mut i = 0;
+            loop {
+                let byte = self.read_byte()?;
+
+                match byte {
+                    // Numbers, besides '0', get pushed to the buffer.
+                    b'1'...b'9' => buffer.push(byte as char),
+                    // Character '0' will yield an error, if it happens to be on the beginning,
+                    // while there are still some numbers left.
+                    b'0' => {
+                        let next = self.peek_byte()?;
+                        if next != b'e' && i == 0 {
+                            error = Some(DecodeError::ParseError);
+                            break;
+                        } else {
+                            buffer.push(byte as char);
+                        }
+                    },
+                    // Character '-' will yield an error, if it doesn't appear only at the beginning,
+                    // or if the next character will be character '0'.
+                    b'-' => {
+                        let next = self.peek_byte()?;
+                        if i != 0 || next == b'0' {
+                            error = Some(DecodeError::ParseError);
+                            break;
+                        } else {
+                            buffer.push(byte as char);
+                        }
+                    },
+                    // Break the loop, if it's the end of integer.
+                    b'e' => {
+                        break;
+                    },
+                    // Default case, when something hadn't been covered.
+                    _ => {
+                        error = Some(DecodeError::ParseError);
+                        break;
+                    }
+                }
+
+                i += 1;
+            }
+
+            // Parse the buffer into an integer & return it, only if no error occured.
+            match (buffer.parse(), error) {
+                (Ok(v), None) => Ok(Value::Int(v)),
+                _ => Err(DecodeError::ParseError)
+            }
+        }
     }
 
 
@@ -134,9 +206,21 @@ pub mod bencode {
             Source: http://www.bittorrent.org/beps/bep_0003.html
         */
         #[test]
-        #[ignore]
-        fn parse_num() {
-            unimplemented!();
+        fn decode_num() {
+            // Normal cases.
+            assert_eq!(Decoder::new("i78e").decode_int().unwrap(), Value::Int(78));
+            assert_eq!(Decoder::new("i-360e").decode_int().unwrap(), Value::Int(-360));
+            assert_eq!(Decoder::new("i0e").decode_int().unwrap(), Value::Int(0));
+            assert_eq!(Decoder::new("i7580313e").decode_int().unwrap(), Value::Int(7580313));
+
+            // Edge cases.
+            assert_eq!(Decoder::new("x1e").decode_int().unwrap_err(), DecodeError::UnexpectedSymbol);
+            assert_eq!(Decoder::new("i321f").decode_int().unwrap_err(), DecodeError::ParseError);
+            assert_eq!(Decoder::new("i-0e").decode_int().unwrap_err(), DecodeError::ParseError);
+            assert_eq!(Decoder::new("i8-3e").decode_int().unwrap_err(), DecodeError::ParseError);
+            assert_eq!(Decoder::new("i0321e").decode_int().unwrap_err(), DecodeError::ParseError);
+            assert_eq!(Decoder::new("i547").decode_int().unwrap_err(), DecodeError::EOF);
+            assert_eq!(Decoder::new("isdfe").decode_int().unwrap_err(), DecodeError::ParseError);
         }
 
         /*
@@ -147,7 +231,7 @@ pub mod bencode {
         */
         #[test]
         #[ignore]
-        fn parse_str() {
+        fn decode_str() {
             unimplemented!();
         }
 
@@ -159,7 +243,7 @@ pub mod bencode {
         */
         #[test]
         #[ignore]
-        fn parse_list() {
+        fn decode_list() {
             unimplemented!();
         }
 
@@ -174,7 +258,7 @@ pub mod bencode {
         */
         #[test]
         #[ignore]
-        fn parse_dict() {
+        fn decode_dict() {
             unimplemented!();
         }
     }
