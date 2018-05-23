@@ -40,8 +40,16 @@ pub mod bencode {
     ///     - list
     ///     - dictionary
     ///
+    /// Integer is implemented by i64.
+    ///
+    /// String is implemented by a custom struct Bytes, which holds a Vec of bytes.
+    /// TODO: Make strings easily constructed - now it happens to be a lot of chaining of structs.
+    ///
+    /// List is implemented by a Vec of bencode values.
+    ///
     /// Dictionary is implemented by a std::collections::BTreeMap,
     /// because the keys have to be sorted as raw strings (not alphanumeric).
+    /// It's key is represented by series of bytes & the value can be any bencode value.
     #[derive(Debug, PartialEq)]
     pub enum Value {
         Int(i64),
@@ -109,7 +117,7 @@ pub mod bencode {
         }
 
         /// Decodes an integer at the cursor's current position.
-        /// The position points to the 'i' character.
+        /// The position points to the integer delimiter.
         fn decode_int(&mut self) -> Result<Value, DecodeError> {
             // Expect the first byte to represent an 'i' character,
             // then advance to the next byte.
@@ -197,6 +205,44 @@ pub mod bencode {
 
             Ok(Value::Str(Bytes(buffer.to_vec())))
         }
+
+        /// Decodes a list at the cursor's current position.
+        /// The position points to the list delimiter.
+        fn decode_list(&mut self) -> Result<Value, DecodeError> {
+            // Expect the first byte to represent an 'l' character,
+            // then advance to the next byte.
+            self.expect_byte(b'l')?;
+
+            // Construct a list, to which we will append new data.
+            let mut list: Vec<Value> = Vec::new();
+
+            loop {
+                // Do not consume the next byte, but rather look, 
+                // which value is currently being looked at.
+                let next = self.peek_byte()?;
+
+                let value = match next {
+                    // If the next byte is an integer delimiter, decode integer.
+                    b'i' => self.decode_int()?,
+                    // If the next byte is starting with an integer, decode string.
+                    b'1'...b'9' => self.decode_str()?,
+                    // If the next byte is starting with a list delimiter, decode list.
+                    b'l' => self.decode_list()?,
+                    // If the next byte is an end delimiter, advance one byte & break.
+                    b'e' => { 
+                        self.read_byte()?; 
+                        break; 
+                    }
+                    // TODO: Decode dictionaries inside lists aswell.
+                    // If none matched, return a parse error.
+                    _ => { return Err(DecodeError::ParseError) }
+                };
+
+                list.push(value);
+            }
+
+            Ok(Value::List(list))
+        }
     }
 
 
@@ -280,6 +326,7 @@ pub mod bencode {
             // Edge cases.
             assert_eq!(Decoder::new("4asdf").decode_str().unwrap_err(), DecodeError::EOF);
             assert_eq!(Decoder::new("10:aa").decode_str().unwrap_err(), DecodeError::EOF);
+            assert_eq!(Decoder::new("asdf").decode_str().unwrap_err(), DecodeError::EOF);
         }
 
         /*
@@ -289,9 +336,45 @@ pub mod bencode {
             Source: http://www.bittorrent.org/beps/bep_0003.html
         */
         #[test]
-        #[ignore]
         fn decode_list() {
-            unimplemented!();
+            let mut data: Vec<Value>;
+
+            // Normal cases.
+            // General case of strings.
+            data = vec![
+                Value::Str(Bytes("spam".as_bytes().to_vec())), 
+                Value::Str(Bytes("eggs".as_bytes().to_vec()))
+            ];
+            assert_eq!(Decoder::new("l4:spam4:eggse").decode_list().unwrap(), Value::List(data));
+            // Strings with integers in them.
+            data = vec![
+                Value::Str(Bytes("m4k3s5en5e".as_bytes().to_vec())), 
+                Value::Str(Bytes("bencode".as_bytes().to_vec()))
+            ];
+            assert_eq!(Decoder::new("l10:m4k3s5en5e7:bencodee").decode_list().unwrap(), Value::List(data));
+            // Mixed content of string and integers.
+            data = vec![
+                Value::Str(Bytes("mixed".as_bytes().to_vec())), 
+                Value::Int(-40), 
+                Value::Str(Bytes("content".as_bytes().to_vec()))
+            ];
+            assert_eq!(Decoder::new("l5:mixedi-40e7:contente").decode_list().unwrap(), Value::List(data));
+            // More complex mixing of inner lists.
+            data = vec![
+                Value::Str(Bytes("more".as_bytes().to_vec())), 
+                Value::List(vec![
+                    Value::Str(Bytes("mixed".as_bytes().to_vec())), 
+                    Value::Int(1337)
+                ]), 
+                Value::Str(Bytes("content".as_bytes().to_vec()))
+            ];
+            assert_eq!(Decoder::new("l4:morel5:mixedi1337ee7:contente").decode_list().unwrap(), Value::List(data));
+        
+            // Edge cases.
+            // The errors of other values inside lists happen.
+            assert_eq!(Decoder::new("li-0ee").decode_list().unwrap_err(), DecodeError::ParseError);
+            assert_eq!(Decoder::new("ei783ee").decode_list().unwrap_err(), DecodeError::UnexpectedSymbol);
+            assert_eq!(Decoder::new("li-0e").decode_list().unwrap_err(), DecodeError::ParseError);
         }
 
         /*
