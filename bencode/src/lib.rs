@@ -24,7 +24,6 @@ pub mod bencode {
     pub enum DecodeError {
         Invalid,
         UnexpectedSymbol,
-        UnexpectedEnd,
         UnsupportedType,
         EOF,
         ParseError,
@@ -34,6 +33,15 @@ pub mod bencode {
     #[derive(Debug, PartialEq, Eq, Hash)]
     pub struct Bytes(Vec<u8>);
 
+    /// Value is an enum, holding a decoded bencode value.
+    /// The value can be of multiple types:
+    ///     - integer
+    ///     - string
+    ///     - list
+    ///     - dictionary
+    ///
+    /// Dictionary is implemented by a std::collections::BTreeMap,
+    /// because the keys have to be sorted as raw strings (not alphanumeric).
     #[derive(Debug, PartialEq)]
     pub enum Value {
         Int(i64),
@@ -43,21 +51,30 @@ pub mod bencode {
         None
     }
 
+    /// Decode is a main struct to decode from bencode data into actual values.
+    /// It is implemented by a std::io::Cursor, which holds data to a byte slice.
+    ///
+    /// To use this struct, create a Decoder with "new" function, which converts a string
+    /// slice to a bytes slice.
+    /// After that, the implementation consists of reading, advancing or peeking into the
+    /// bytes slice, which holds the data.
+    /// Decoding of values happen by correctly matching the BitTorrent implementation, which
+    /// is described at it's official site.
     #[derive(Debug)]
     struct Decoder<'a> {
         data: std::io::Cursor<&'a [u8]>
     }
 
     impl<'a> Decoder<'a> {
-        // Constructs a new decoder.
-        // Accepts data as a string slice,
-        // which then converts it to bytes to the underlying cursor.
+        /// Constructs a new decoder.
+        /// Accepts data as a string slice,
+        /// which then converts it to bytes to the underlying cursor.
         pub fn new(data: &str) -> Decoder {
             Decoder{ data: std::io::Cursor::new(data.as_bytes()) }
         }
 
-        // Read and advance from the cursor to the length of a passed buffer
-        // & save the data to it.
+        /// Read and advance from the cursor to the length of a passed buffer
+        /// & save the data to it.
         fn read(&mut self, buf: &mut [u8]) -> Result<(), DecodeError> {
             match self.data.read(buf) {
                 Ok(n) if n == buf.len() => Ok(()),
@@ -65,14 +82,14 @@ pub mod bencode {
             }
         }
 
-        // Read & advance one byte from the cursor.
+        /// Read & advance one byte from the cursor.
         fn read_byte(&mut self) -> Result<u8, DecodeError> {
-            let mut buf = [0u8];
+            let mut buf = [0u8; 1];
             try!(self.read(&mut buf));
             Ok(buf[0])
         }
 
-        // Peeks, without advancing, one byte from the cursor.
+        /// Peeks, without advancing, one byte from the cursor.
         fn peek_byte(&mut self) -> Result<u8, DecodeError> {
             let data = self.read_byte()?;
             let pos = self.data.position();
@@ -80,7 +97,7 @@ pub mod bencode {
             Ok(data)
         }
 
-        // Reads & advance one byte, with expectation.
+        /// Reads & advance one byte, with expectation.
         fn expect_byte(&mut self, expect: u8) -> Result<(), DecodeError> {
             let byte = self.read_byte()?;
 
@@ -91,17 +108,18 @@ pub mod bencode {
             }
         }
 
-        // Decodes an integer of the cursor's current position.
-        // The position points to the 'i' character.
+        /// Decodes an integer at the cursor's current position.
+        /// The position points to the 'i' character.
         fn decode_int(&mut self) -> Result<Value, DecodeError> {
-            // Expect the first byte to represent an 'i' character.
-            self.expect_byte('i' as u8)?;
+            // Expect the first byte to represent an 'i' character,
+            // then advance to the next byte.
+            self.expect_byte(b'i')?;
 
             // Construct a buffer, from which we will parse the bytes into a number.
             // Error represents something, in which the parsing failed somehow.
             // Keep an index of the current loop iteration for logic regarding the '0' or '-' character.
             let mut buffer = String::new();
-            let mut i = 0;
+            let mut i = 0u64;
             loop {
                 let byte = self.read_byte()?;
 
@@ -141,13 +159,15 @@ pub mod bencode {
                 i += 1;
             }
 
-            // Parse the buffer into an integer & return it, only if no error occured.
+            // Parse the buffer into an integer.
             match buffer.parse() {
                 Ok(v) => Ok(Value::Int(v)),
                 _ => Err(DecodeError::ParseError)
             }
         }
 
+        /// Decodes a string at the cursor's current position.
+        /// The position points to the starting length of the string.
         fn decode_str(&mut self) -> Result<Value, DecodeError> {
             // Extract the length of the buffer from the string value.
             let mut buffer_len = String::new();            
@@ -166,7 +186,7 @@ pub mod bencode {
 
             // Parse the length of bytes into a number.
             let length: usize;
-            match buffer_len.parse() {
+            match buffer_len.parse::<usize>() {
                 Ok(l) => length = l,
                 _ => { return Err(DecodeError::ParseError) }
             };
@@ -187,9 +207,7 @@ pub mod bencode {
         use std;
         use bencode::{Decoder, DecodeError, Value, Bytes};
 
-        /*
-            Tests the reading, advancing & peeking of data.
-        */
+        /// Tests the reading, advancing & peeking of data.
         #[test]
         fn read_and_peek() {
             let data = "i3784e";
@@ -198,12 +216,12 @@ pub mod bencode {
 
             // Check, if reading of one byte advances the underlying cursor.
             let mut byte = decoder.read_byte().unwrap();
-            assert_eq!(byte, 'i' as u8);
+            assert_eq!(byte, b'i');
             assert_eq!(decoder.data.position(), 1);
 
             // Check, if peeking of one byte doesn't advance the underlying cursor.
             byte = decoder.peek_byte().unwrap();
-            assert_eq!(byte, '3' as u8);
+            assert_eq!(byte, b'3');
             assert_eq!(decoder.data.position(), 1);
         
             // Read until the end & compare the expected with the position.
@@ -211,7 +229,7 @@ pub mod bencode {
             let expected: &[u8] = "3784e".as_bytes();
             decoder.read(&mut buf).unwrap();
             assert_eq!(buf, expected);
-            assert_eq!(decoder.data.position(), data.len() as u64);
+            assert_eq!(decoder.data.position() as usize, data.len());
 
             // Reading & peeking at the end should return an error.
             assert_eq!(decoder.read_byte().unwrap_err(), DecodeError::EOF);
@@ -229,7 +247,7 @@ pub mod bencode {
             Source: http://www.bittorrent.org/beps/bep_0003.html
         */
         #[test]
-        fn decode_num() {
+        fn decode_int() {
             // Normal cases.
             assert_eq!(Decoder::new("i78e").decode_int().unwrap(), Value::Int(78));
             assert_eq!(Decoder::new("i-360e").decode_int().unwrap(), Value::Int(-360));
@@ -254,9 +272,12 @@ pub mod bencode {
         */
         #[test]
         fn decode_str() {
+            // Normal cases.
             assert_eq!(Decoder::new("4:asdf").decode_str().unwrap(), Value::Str(Bytes("asdf".as_bytes().to_vec())));
             assert_eq!(Decoder::new("7:bencode").decode_str().unwrap(), Value::Str(Bytes("bencode".as_bytes().to_vec())));
+            assert_eq!(Decoder::new("10:m4k3s5en5e").decode_str().unwrap(), Value::Str(Bytes("m4k3s5en5e".as_bytes().to_vec())));
 
+            // Edge cases.
             assert_eq!(Decoder::new("4asdf").decode_str().unwrap_err(), DecodeError::EOF);
             assert_eq!(Decoder::new("10:aa").decode_str().unwrap_err(), DecodeError::EOF);
         }
