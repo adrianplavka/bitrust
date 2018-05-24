@@ -9,7 +9,8 @@
 pub mod bencode {
     use std;
     use std::result::{Result};
-    use std::io::{Read, BufRead};
+    use std::io::{Cursor, Read, BufRead};
+    use std::collections::{BTreeMap};
 
     pub fn decode(data: &str) -> Result<Value, DecodeError> {
         // TODO: Make use of decode functions.
@@ -30,7 +31,7 @@ pub mod bencode {
         Unknown
     }
     
-    #[derive(Debug, PartialEq, Eq, Hash)]
+    #[derive(Debug, PartialEq, Eq, Hash, Ord, PartialOrd)]
     pub struct Bytes(Vec<u8>);
 
     /// Value is an enum, holding a decoded bencode value.
@@ -55,7 +56,7 @@ pub mod bencode {
         Int(i64),
         Str(Bytes),
         List(Vec<Value>),
-        Dict(std::collections::BTreeMap<Bytes, Value>),
+        Dict(BTreeMap<Bytes, Value>),
         None
     }
 
@@ -67,10 +68,10 @@ pub mod bencode {
     /// After that, the implementation consists of reading, advancing or peeking into the
     /// bytes slice, which holds the data.
     /// Decoding of values happen by correctly matching the BitTorrent implementation, which
-    /// is described at it's official site.
+    /// is described @ http://www.bittorrent.org.
     #[derive(Debug)]
     struct Decoder<'a> {
-        data: std::io::Cursor<&'a [u8]>
+        data: Cursor<&'a [u8]>
     }
 
     impl<'a> Decoder<'a> {
@@ -78,7 +79,7 @@ pub mod bencode {
         /// Accepts data as a string slice,
         /// which then converts it to bytes to the underlying cursor.
         pub fn new(data: &str) -> Decoder {
-            Decoder{ data: std::io::Cursor::new(data.as_bytes()) }
+            Decoder{ data: Cursor::new(data.as_bytes()) }
         }
 
         /// Read and advance from the cursor to the length of a passed buffer
@@ -193,14 +194,14 @@ pub mod bencode {
             }
 
             // Parse the length of bytes into a number.
-            let length: usize;
+            let len: usize;
             match buffer_len.parse::<usize>() {
-                Ok(l) => length = l,
+                Ok(l) => len = l,
                 _ => { return Err(DecodeError::ParseError) }
             };
 
             // Construct a buffer & read until the length of the buffer.
-            let mut buffer: Vec<u8> = vec![0u8; length];
+            let mut buffer: Vec<u8> = vec![0u8; len];
             self.read(&mut buffer[..])?;
 
             Ok(Value::Str(Bytes(buffer.to_vec())))
@@ -228,12 +229,13 @@ pub mod bencode {
                     b'1'...b'9' => self.decode_str()?,
                     // If the next byte is starting with a list delimiter, decode list.
                     b'l' => self.decode_list()?,
+                    // If the next byte is starting with a dictionary delimiter, decode dictionary.
+                    b'd' => self.decode_dict()?,
                     // If the next byte is an end delimiter, advance one byte & break.
                     b'e' => { 
                         self.read_byte()?; 
                         break; 
-                    }
-                    // TODO: Decode dictionaries inside lists aswell.
+                    },
                     // If none matched, return a parse error.
                     _ => { return Err(DecodeError::ParseError) }
                 };
@@ -243,6 +245,55 @@ pub mod bencode {
 
             Ok(Value::List(list))
         }
+
+        /// Decodes a dictionary at the cursor's current position.
+        /// The position points to the dictionary delimiter.
+        // TEST: d3:key5:valuee
+        fn decode_dict(&mut self) -> Result<Value, DecodeError> {
+            // Expect the first byte to represent a 'd' character,
+            // then advance to the next byte.
+            self.expect_byte(b'd')?;
+
+            // Construct a dictionary, implemented by binary tree map, to which we will
+            // append new data.
+            let mut dict: BTreeMap<Bytes, Value> = BTreeMap::new();
+
+            loop {
+                // Expect a key to be at the first position.
+                // The key has to be a string only.
+                let next_key = self.peek_byte()?;
+                let key = match next_key {
+                    // If the key starts with numbers, decode a string.
+                    b'1'...b'9' => self.decode_str()?,
+                    // Otherwise, if there is no other key, but an ending delimiter of a dictionary,
+                    // advance one byte & break.
+                    b'e' => {
+                        self.read_byte()?;
+                        break;
+                    },
+                    _ => { return Err(DecodeError::ParseError) }
+                };
+
+                // Expect a value to be at the second position.
+                // The value can be anything.
+                let next_value = self.peek_byte()?;
+                let value = match next_value {
+                    b'i' => self.decode_int()?,
+                    b'1'...b'9' => self.decode_str()?,
+                    b'l' => self.decode_list()?,
+                    b'd' => self.decode_dict()?,
+                    _ => { return Err(DecodeError::ParseError) }
+                };
+
+                // Deconstruct the key from the string value & insert it into the map.
+                match key {
+                    Value::Str(k) => dict.insert(k, value),
+                    _ => { return Err(DecodeError::ParseError) }
+                };
+            }
+
+            Ok(Value::Dict(dict))
+        }
     }
 
 
@@ -251,6 +302,7 @@ pub mod bencode {
         extern crate test;
 
         use std;
+        use std::collections::{BTreeMap};
         use bencode::{Decoder, DecodeError, Value, Bytes};
 
         /// Tests the reading, advancing & peeking of data.
@@ -387,9 +439,46 @@ pub mod bencode {
             Source: http://www.bittorrent.org/beps/bep_0003.html
         */
         #[test]
-        #[ignore]
         fn decode_dict() {
-            unimplemented!();
+            let mut data: BTreeMap<Bytes, Value> = BTreeMap::new();
+
+            // Normal cases.
+            // General case of strings.
+            data.insert(
+                Bytes("key".as_bytes().to_vec()), 
+                Value::Str(Bytes("value".as_bytes().to_vec()))
+            );
+            assert_eq!(
+                Decoder::new("d3:key5:valuee").decode_dict().unwrap(), 
+                Value::Dict(data)
+            );
+            // Mixed content.
+            data = BTreeMap::new();
+            let mut temp_data: BTreeMap<Bytes, Value> = BTreeMap::new();
+            temp_data.insert(
+                Bytes("inside".as_bytes().to_vec()), 
+                Value::Int(43)
+            );
+            data.insert(
+                Bytes("list".as_bytes().to_vec()), 
+                Value::List(
+                    vec![Value::Int(3), Value::Int(-83)]
+                )
+            );
+            data.insert(
+                Bytes("content".as_bytes().to_vec()), 
+                Value::Dict(temp_data)
+            );
+            assert_eq!(
+                Decoder::new("d4:listli3ei-83ee7:contentd6:insidei43eee").decode_dict().unwrap(), 
+                Value::Dict(data)
+            );
+        
+            // Edge cases.
+            // Empty dictionary should return an empty dictionary aswell.
+            assert_eq!(Decoder::new("de").decode_dict().unwrap(), Value::Dict(BTreeMap::new()));
+            // A non-string key should return a parse error.
+            assert_eq!(Decoder::new("di35ee").decode_dict().unwrap_err(), DecodeError::ParseError);
         }
     }
 
