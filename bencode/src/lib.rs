@@ -254,7 +254,6 @@ pub mod bencode {
 
         /// Decodes a dictionary at the cursor's current position.
         /// The position points to the dictionary delimiter.
-        // TEST: d3:key5:valuee
         fn decode_dict(&mut self) -> Result<Value, DecodeError> {
             // Expect the first byte to represent a 'd' character,
             // then advance to the next byte.
@@ -270,10 +269,9 @@ pub mod bencode {
                 let next_key = self.peek_byte()?;
                 let key = match next_key {
                     // If the key starts with numbers, decode a string.
-                    // FIXME: Don't allow a non-value key into a dictionary.
-                    // Fix it by making a separate check for a zero character.
+                    // Note that the key can't be of a zero length. 
                     b'1'...b'9' => self.decode_str()?,
-                    // Otherwise, if there is no other key, but an ending delimiter of a dictionary,
+                    // If there is an ending delimiter of a dictionary,
                     // advance one byte & break.
                     b'e' => {
                         self.read_byte()?;
@@ -432,6 +430,7 @@ pub mod bencode {
             assert_eq!(Decoder::new("l4:morel5:mixedi1337ee7:contente").decode_list().unwrap(), Value::List(data));
         
             // Edge cases.
+            // Empty list should return an empty Vec aswell.
             assert_eq!(Decoder::new("le").decode_list().unwrap(), Value::List(vec![]));
             // The errors of other values inside lists happen.
             assert_eq!(Decoder::new("li-0ee").decode_list().unwrap_err(), DecodeError::ParseError);
@@ -466,7 +465,7 @@ pub mod bencode {
             data = BTreeMap::new();
             let mut temp_data: BTreeMap<Bytes, Value> = BTreeMap::new();
             temp_data.insert(
-                Bytes::from("inside"), 
+                Bytes::from("insidemeto"), 
                 Value::Int(43)
             );
             data.insert(
@@ -480,12 +479,12 @@ pub mod bencode {
                 Value::Dict(temp_data)
             );
             assert_eq!(
-                Decoder::new("d4:listli3ei-83ee7:contentd6:insidei43eee").decode_dict().unwrap(), 
+                Decoder::new("d4:listli3ei-83ee7:contentd10:insidemetoi43eee").decode_dict().unwrap(), 
                 Value::Dict(data)
             );
         
             // Edge cases.
-            // Empty dictionary should return an empty dictionary aswell.
+            // Empty dictionary should return an empty BTreeMap aswell.
             assert_eq!(Decoder::new("de").decode_dict().unwrap(), Value::Dict(BTreeMap::new()));
             // A non-string key should return a parse error.
             assert_eq!(Decoder::new("di35ee").decode_dict().unwrap_err(), DecodeError::ParseError);
