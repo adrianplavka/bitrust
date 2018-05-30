@@ -6,9 +6,14 @@ use std::fmt::{self, Debug, Display};
 use std::io;
 use std::result;
 
+use serde::de;
+
 /// This type represents all possible errors that can occur.
 #[derive(PartialEq)]
 pub enum Error {
+    /// Catchall for deserialization & serialization error messages.
+    Message(Box<str>),
+
     /// ParseError occurs, when a match case hadn't been covered in a parsing stage.
     ParseError,
 
@@ -37,8 +42,9 @@ impl error::Error for Error {
 impl From<Error> for io::Error {
     fn from(e: Error) -> Self {
         match e {
-            Error::DataError 
+            Error::Message(_)
             | Error::ParseError
+            | Error::DataError 
             | Error::UnexpectedSymbol
             | Error::NonStringKey => io::Error::new(io::ErrorKind::InvalidData, e),
             Error::EOF => io::Error::new(io::ErrorKind::UnexpectedEof, e)
@@ -49,6 +55,7 @@ impl From<Error> for io::Error {
 impl Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
+            Error::Message(ref m) => f.write_str(m),
             Error::ParseError => f.write_str("parsing error occured"),
             Error::DataError => f.write_str("data error occured"),
             Error::UnexpectedSymbol => f.write_str("unexpected symbol occured"),
@@ -65,5 +72,21 @@ impl Debug for Error {
             "Error({:?})",
             self.to_string()
         )
+    }
+}
+
+impl de::Error for Error {
+    #[cold]
+    fn custom<T: Display>(msg: T) -> Error {
+        Error::Message(msg.to_string().into_boxed_str())
+    }
+
+    #[cold]
+    fn invalid_type(unexp: de::Unexpected, exp: &de::Expected) -> Self {
+        if let de::Unexpected::Unit = unexp {
+            Error::custom(format_args!("invalid type: null, expected {}", exp))
+        } else {
+            Error::custom(format_args!("invalid type: {}, expected {}", unexp, exp))
+        }
     }
 }
