@@ -1,11 +1,6 @@
 
 //! Bencode decoder.
 
-// TODO: Remove these after the successful implementation.
-#![allow(dead_code)]
-#![allow(unused_variables)]
-#![allow(unused_imports)]
-
 use std;
 use std::io::{Cursor, Read, BufRead};
 use std::collections::{BTreeMap};
@@ -83,7 +78,7 @@ impl<'a> Decoder<'a> {
     fn read(&mut self, buf: &mut [u8]) -> Result<()> {
         match self.data.read(buf) {
             Ok(n) if n == buf.len() => Ok(()),
-            _ => Err(self.err_eof())
+            _ => Err(Error::EOF)
         }
     }
 
@@ -109,7 +104,7 @@ impl<'a> Decoder<'a> {
         if byte == expect {
             Ok(())
         } else {
-            Err(self.err_unexpected_symbol())
+            Err(Error::UnexpectedSymbol)
         }
     }
 
@@ -121,10 +116,10 @@ impl<'a> Decoder<'a> {
         self.expect_byte(b'i')?;
 
         // Construct a buffer, from which we will parse the bytes into a number.
-        // Error represents something, in which the parsing failed somehow.
-        // Keep an index of the current loop iteration for logic regarding the '0' or '-' character.
+        // Keep a flag of the zeroth loop iteration for logic regarding the '0' or '-' character.
         let mut buffer = String::new();
-        for i in 0u64.. {
+        let mut is_zeroth = true;
+        loop {
             let byte = self.read_byte()?;
 
             match byte {
@@ -134,8 +129,8 @@ impl<'a> Decoder<'a> {
                 // while there are still some numbers left.
                 b'0' => {
                     let next = self.peek_byte()?;
-                    if next != b'e' && i == 0 {
-                        return Err(self.err_data());
+                    if next != b'e' && is_zeroth {
+                        return Err(Error::DataError);
                     } else {
                         buffer.push(byte as char);
                     }
@@ -144,8 +139,8 @@ impl<'a> Decoder<'a> {
                 // or if the next character will be character '0'.
                 b'-' => {
                     let next = self.peek_byte()?;
-                    if i != 0 || next == b'0' {
-                        return Err(self.err_data());
+                    if next == b'0' || !is_zeroth {
+                        return Err(Error::DataError);
                     } else {
                         buffer.push(byte as char);
                     }
@@ -156,15 +151,17 @@ impl<'a> Decoder<'a> {
                 },
                 // Default case, when something hadn't been covered.
                 _ => {
-                    return Err(self.err_parse());
+                    return Err(Error::ParseError);
                 }
             }
+
+            is_zeroth = false;
         }
 
         // Parse the buffer into an integer.
         match buffer.parse() {
             Ok(v) => Ok(Value::Int(v)),
-            _ => Err(self.err_parse())
+            _ => Err(Error::ParseError)
         }
     }
 
@@ -182,7 +179,7 @@ impl<'a> Decoder<'a> {
                 // The ending delimiter of the buffer length.
                 b':' => { break; },
                 // Default case, when something hadn't been covered.
-                _ => { return Err(self.err_parse()); }
+                _ => { return Err(Error::ParseError); }
             }
         }
 
@@ -190,7 +187,7 @@ impl<'a> Decoder<'a> {
         let len: usize;
         match buffer_len.parse::<usize>() {
             Ok(l) => len = l,
-            _ => { return Err(self.err_parse()); }
+            _ => { return Err(Error::ParseError); }
         };
 
         // Construct a buffer & read until the length of the buffer.
@@ -209,7 +206,6 @@ impl<'a> Decoder<'a> {
 
         // Construct a list, to which we will append new data.
         let mut list: Vec<Value> = Vec::new();
-
         loop {
             // Do not consume the next byte, but rather look, 
             // which value is currently being looked at.
@@ -230,7 +226,7 @@ impl<'a> Decoder<'a> {
                     break; 
                 },
                 // Default case, when something hadn't been covered.
-                _ => { return Err(self.err_parse()); }
+                _ => { return Err(Error::ParseError); }
             };
 
             list.push(value);
@@ -249,7 +245,6 @@ impl<'a> Decoder<'a> {
         // Construct a dictionary, implemented by binary tree map, to which we will
         // append new data.
         let mut dict: BTreeMap<Bytes, Value> = BTreeMap::new();
-
         loop {
             // Expect a key to be at the first position.
             // The key has to be a string only.
@@ -265,7 +260,7 @@ impl<'a> Decoder<'a> {
                     break;
                 },
                 // Default case, when something hadn't been covered.
-                _ => { return Err(self.err_nonstring_key()); }
+                _ => { return Err(Error::NonStringKey); }
             };
 
             // Expect a value to be at the second position.
@@ -276,40 +271,19 @@ impl<'a> Decoder<'a> {
                 b'0'...b'9' => self.decode_str()?,
                 b'l' => self.decode_list()?,
                 b'd' => self.decode_dict()?,
-                _ => { return Err(self.err_parse()); }
+                _ => { return Err(Error::ParseError); }
             };
 
             // Deconstruct the key from the string value & insert it into the map.
             match key {
                 Value::Str(k) => dict.insert(k, value),
-                _ => { return Err(self.err_parse()); }
+                _ => { return Err(Error::ParseError); }
             };
         }
 
         Ok(Value::Dict(dict))
     }
-
-    fn err_parse(&self) -> Error {
-        Error::ParseError
-    }
-
-    fn err_data(&self) -> Error {
-        Error::DataError
-    }
-
-    fn err_unexpected_symbol(&self) -> Error {
-        Error::UnexpectedSymbol
-    }
-
-    fn err_nonstring_key(&self) -> Error {
-        Error::NonStringKey
-    }
-
-    fn err_eof(&self) -> Error {
-        Error::EOF
-    }
 }
-
 
 #[cfg(test)]
 mod test {
