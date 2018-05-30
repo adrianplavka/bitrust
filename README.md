@@ -1,5 +1,7 @@
 
-# Bitrust - BitTorrent implementation in Rust.
+# Bitrust
+
+## BitTorrent implementation in Rust.
 
 [![Build Status](https://travis-ci.com/adrianplavka/bitrust.svg?branch=master)](https://travis-ci.com/adrianplavka/bitrust)
 
