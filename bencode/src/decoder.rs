@@ -1,4 +1,6 @@
 
+//! Bencode decoder.
+
 // TODO: Remove these after the successful implementation.
 #![allow(dead_code)]
 #![allow(unused_variables)]
@@ -9,7 +11,7 @@ use std::io::{Cursor, Read, BufRead};
 use std::collections::{BTreeMap};
 use std::convert::{From};
 
-use super::error::{Error, ErrorCode, Result};
+use super::error::{Error, Result};
 
 pub fn decode(data: &str) -> Result<Value> {
     // TODO: Make use of decode functions.
@@ -122,8 +124,7 @@ impl<'a> Decoder<'a> {
         // Error represents something, in which the parsing failed somehow.
         // Keep an index of the current loop iteration for logic regarding the '0' or '-' character.
         let mut buffer = String::new();
-        let mut i = 0u64;
-        loop {
+        for i in 0u64.. {
             let byte = self.read_byte()?;
 
             match byte {
@@ -158,8 +159,6 @@ impl<'a> Decoder<'a> {
                     return Err(self.err_parse());
                 }
             }
-
-            i += 1;
         }
 
         // Parse the buffer into an integer.
@@ -266,7 +265,7 @@ impl<'a> Decoder<'a> {
                     break;
                 },
                 // Default case, when something hadn't been covered.
-                _ => { return Err(self.err_data()); }
+                _ => { return Err(self.err_nonstring_key()); }
             };
 
             // Expect a value to be at the second position.
@@ -277,7 +276,7 @@ impl<'a> Decoder<'a> {
                 b'0'...b'9' => self.decode_str()?,
                 b'l' => self.decode_list()?,
                 b'd' => self.decode_dict()?,
-                _ => { return Err(self.err_data()); }
+                _ => { return Err(self.err_parse()); }
             };
 
             // Deconstruct the key from the string value & insert it into the map.
@@ -291,19 +290,23 @@ impl<'a> Decoder<'a> {
     }
 
     fn err_parse(&self) -> Error {
-        Error::new(ErrorCode::ParseError)
+        Error::ParseError
     }
 
     fn err_data(&self) -> Error {
-        Error::new(ErrorCode::DataError)
+        Error::DataError
     }
 
     fn err_unexpected_symbol(&self) -> Error {
-        Error::new(ErrorCode::UnexpectedSymbol)
+        Error::UnexpectedSymbol
+    }
+
+    fn err_nonstring_key(&self) -> Error {
+        Error::NonStringKey
     }
 
     fn err_eof(&self) -> Error {
-        Error::new(ErrorCode::EOF)
+        Error::EOF
     }
 }
 
@@ -313,7 +316,7 @@ mod test {
     use std;
     use std::collections::{BTreeMap};
     use decoder::{Decoder, Value, Bytes};
-    use ::error::{ErrorCode};
+    use ::error::{Error};
 
     /// Tests the reading, advancing & peeking of data.
     #[test]
@@ -340,8 +343,8 @@ mod test {
         assert_eq!(decoder.data.position() as usize, data.len());
 
         // Reading & peeking at the end should return an error.
-        assert_eq!(decoder.read_byte().unwrap_err().code, ErrorCode::EOF);
-        assert_eq!(decoder.peek_byte().unwrap_err().code, ErrorCode::EOF);
+        assert_eq!(decoder.read_byte().unwrap_err(), Error::EOF);
+        assert_eq!(decoder.peek_byte().unwrap_err(), Error::EOF);
     }
 
     /*
@@ -363,13 +366,13 @@ mod test {
         assert_eq!(Decoder::new("i7580313e").decode_int().unwrap(), Value::Int(7580313));
 
         // Edge cases.
-        assert_eq!(Decoder::new("x1e").decode_int().unwrap_err().code, ErrorCode::UnexpectedSymbol);
-        assert_eq!(Decoder::new("i321f").decode_int().unwrap_err().code, ErrorCode::ParseError);
-        assert_eq!(Decoder::new("i-0e").decode_int().unwrap_err().code, ErrorCode::DataError);
-        assert_eq!(Decoder::new("i8-3e").decode_int().unwrap_err().code, ErrorCode::DataError);
-        assert_eq!(Decoder::new("i0321e").decode_int().unwrap_err().code, ErrorCode::DataError);
-        assert_eq!(Decoder::new("i547").decode_int().unwrap_err().code, ErrorCode::EOF);
-        assert_eq!(Decoder::new("isdfe").decode_int().unwrap_err().code, ErrorCode::ParseError);
+        assert_eq!(Decoder::new("x1e").decode_int().unwrap_err(), Error::UnexpectedSymbol);
+        assert_eq!(Decoder::new("i321f").decode_int().unwrap_err(), Error::ParseError);
+        assert_eq!(Decoder::new("i-0e").decode_int().unwrap_err(), Error::DataError);
+        assert_eq!(Decoder::new("i8-3e").decode_int().unwrap_err(), Error::DataError);
+        assert_eq!(Decoder::new("i0321e").decode_int().unwrap_err(), Error::DataError);
+        assert_eq!(Decoder::new("i547").decode_int().unwrap_err(), Error::EOF);
+        assert_eq!(Decoder::new("isdfe").decode_int().unwrap_err(), Error::ParseError);
     }
 
     /*
@@ -384,12 +387,12 @@ mod test {
         assert_eq!(Decoder::new("4:asdf").decode_str().unwrap(), Value::Str(Bytes::from("asdf")));
         assert_eq!(Decoder::new("7:bencode").decode_str().unwrap(), Value::Str(Bytes::from("bencode")));
         assert_eq!(Decoder::new("10:m4k3s5en5e").decode_str().unwrap(), Value::Str(Bytes::from("m4k3s5en5e")));
+        assert_eq!(Decoder::new("0:").decode_str().unwrap(), Value::Str(Bytes(vec![])));
 
         // Edge cases.
-        assert_eq!(Decoder::new("4asdf").decode_str().unwrap_err().code, ErrorCode::ParseError);
-        assert_eq!(Decoder::new("10:aa").decode_str().unwrap_err().code, ErrorCode::EOF);
-        assert_eq!(Decoder::new("asdf").decode_str().unwrap_err().code, ErrorCode::ParseError);
-        assert_eq!(Decoder::new("0:").decode_str().unwrap(), Value::Str(Bytes(vec![])));
+        assert_eq!(Decoder::new("4asdf").decode_str().unwrap_err(), Error::ParseError);
+        assert_eq!(Decoder::new("10:aa").decode_str().unwrap_err(), Error::EOF);
+        assert_eq!(Decoder::new("asdf").decode_str().unwrap_err(), Error::ParseError);
     }
 
     /*
@@ -432,14 +435,14 @@ mod test {
             Value::Str(Bytes::from("content"))
         ];
         assert_eq!(Decoder::new("l4:morel5:mixedi1337ee7:contente").decode_list().unwrap(), Value::List(data));
-    
-        // Edge cases.
         // Empty list should return an empty Vec aswell.
         assert_eq!(Decoder::new("le").decode_list().unwrap(), Value::List(vec![]));
+
+        // Edge cases.
         // The errors of other values inside lists happen.
-        assert_eq!(Decoder::new("li-0ee").decode_list().unwrap_err().code, ErrorCode::DataError);
-        assert_eq!(Decoder::new("ei783ee").decode_list().unwrap_err().code, ErrorCode::UnexpectedSymbol);
-        assert_eq!(Decoder::new("li-0e").decode_list().unwrap_err().code, ErrorCode::DataError);
+        assert_eq!(Decoder::new("li-0ee").decode_list().unwrap_err(), Error::DataError);
+        assert_eq!(Decoder::new("ei783ee").decode_list().unwrap_err(), Error::UnexpectedSymbol);
+        assert_eq!(Decoder::new("li-0e").decode_list().unwrap_err(), Error::DataError);
     }
 
     /*
@@ -486,16 +489,16 @@ mod test {
             Decoder::new("d4:listli3ei-83ee7:contentd10:insidemetoi43eee").decode_dict().unwrap(), 
             Value::Dict(data)
         );
-    
-        // Edge cases.
         // Empty dictionary should return an empty BTreeMap aswell.
         assert_eq!(Decoder::new("de").decode_dict().unwrap(), Value::Dict(BTreeMap::new()));
-        // A non-string key should return a data error.
-        assert_eq!(Decoder::new("di35ee").decode_dict().unwrap_err().code, ErrorCode::DataError);
-        // An empty key in a dictionary should return a data error.
-        assert_eq!(Decoder::new("d0:17:iwillnevergetheree").decode_dict().unwrap_err().code, ErrorCode::DataError);
+    
+        // Edge cases.
+        // A non-string key should return a parse error.
+        assert_eq!(Decoder::new("di35ee").decode_dict().unwrap_err(), Error::NonStringKey);
+        // An empty key in a dictionary should return a parse error.
+        assert_eq!(Decoder::new("d0:17:iwillnevergetheree").decode_dict().unwrap_err(), Error::NonStringKey);
         // An unfinished dictionary should return an EOF error.
-        assert_eq!(Decoder::new("d3:hey99:unfinished").decode_dict().unwrap_err().code, ErrorCode::EOF);
+        assert_eq!(Decoder::new("d3:hey99:unfinished").decode_dict().unwrap_err(), Error::EOF);
     }
 }
 
