@@ -5,28 +5,19 @@
 #![allow(unused_imports)]
 
 use std;
-use std::result::{Result};
 use std::io::{Cursor, Read, BufRead};
 use std::collections::{BTreeMap};
 use std::convert::{From};
 
-pub fn decode(data: &str) -> Result<Value, DecodeError> {
+use super::error::{Error, ErrorCode, Result};
+
+pub fn decode(data: &str) -> Result<Value> {
     // TODO: Make use of decode functions.
     unimplemented!()
 }
 
-pub fn decode_from<R: std::io::Read + std::io::Seek>(reader: R) -> Result<Value, DecodeError> {
+pub fn decode_from<R: std::io::Read + std::io::Seek>(reader: R) -> Result<Value> {
     unimplemented!()
-}
-
-#[derive(Debug, PartialEq)]
-pub enum DecodeError {
-    Invalid,
-    UnexpectedSymbol,
-    UnsupportedType,
-    EOF,
-    ParseError,
-    Unknown
 }
 
 #[derive(Debug, PartialEq, Eq, Hash, Ord, PartialOrd)]
@@ -87,22 +78,22 @@ impl<'a> Decoder<'a> {
 
     /// Read and advance from the cursor to the length of a passed buffer
     /// & save the data to it.
-    fn read(&mut self, buf: &mut [u8]) -> Result<(), DecodeError> {
+    fn read(&mut self, buf: &mut [u8]) -> Result<()> {
         match self.data.read(buf) {
             Ok(n) if n == buf.len() => Ok(()),
-            _ => Err(DecodeError::EOF)
+            _ => Err(self.err_eof())
         }
     }
 
     /// Read & advance one byte from the cursor.
-    fn read_byte(&mut self) -> Result<u8, DecodeError> {
+    fn read_byte(&mut self) -> Result<u8> {
         let mut buf = [0u8; 1];
         try!(self.read(&mut buf));
         Ok(buf[0])
     }
 
     /// Peeks, without advancing, one byte from the cursor.
-    fn peek_byte(&mut self) -> Result<u8, DecodeError> {
+    fn peek_byte(&mut self) -> Result<u8> {
         let data = self.read_byte()?;
         let pos = self.data.position();
         self.data.set_position(pos - 1);
@@ -110,19 +101,19 @@ impl<'a> Decoder<'a> {
     }
 
     /// Reads & advance one byte, with expectation.
-    fn expect_byte(&mut self, expect: u8) -> Result<(), DecodeError> {
+    fn expect_byte(&mut self, expect: u8) -> Result<()> {
         let byte = self.read_byte()?;
 
         if byte == expect {
             Ok(())
         } else {
-            Err(DecodeError::UnexpectedSymbol)
+            Err(self.err_unexpected_symbol())
         }
     }
 
     /// Decodes an integer at the cursor's current position.
     /// The position points to the integer delimiter.
-    fn decode_int(&mut self) -> Result<Value, DecodeError> {
+    fn decode_int(&mut self) -> Result<Value> {
         // Expect the first byte to represent an 'i' character,
         // then advance to the next byte.
         self.expect_byte(b'i')?;
@@ -143,7 +134,7 @@ impl<'a> Decoder<'a> {
                 b'0' => {
                     let next = self.peek_byte()?;
                     if next != b'e' && i == 0 {
-                        return Err(DecodeError::ParseError);
+                        return Err(self.err_data());
                     } else {
                         buffer.push(byte as char);
                     }
@@ -153,7 +144,7 @@ impl<'a> Decoder<'a> {
                 b'-' => {
                     let next = self.peek_byte()?;
                     if i != 0 || next == b'0' {
-                        return Err(DecodeError::ParseError);
+                        return Err(self.err_data());
                     } else {
                         buffer.push(byte as char);
                     }
@@ -164,7 +155,7 @@ impl<'a> Decoder<'a> {
                 },
                 // Default case, when something hadn't been covered.
                 _ => {
-                    return Err(DecodeError::ParseError);
+                    return Err(self.err_parse());
                 }
             }
 
@@ -174,13 +165,13 @@ impl<'a> Decoder<'a> {
         // Parse the buffer into an integer.
         match buffer.parse() {
             Ok(v) => Ok(Value::Int(v)),
-            _ => Err(DecodeError::ParseError)
+            _ => Err(self.err_parse())
         }
     }
 
     /// Decodes a string at the cursor's current position.
     /// The position points to the starting length of the string.
-    fn decode_str(&mut self) -> Result<Value, DecodeError> {
+    fn decode_str(&mut self) -> Result<Value> {
         // Extract the length of the buffer from the string value.
         let mut buffer_len = String::new();            
         loop {
@@ -191,8 +182,8 @@ impl<'a> Decoder<'a> {
                 b'0'...b'9' => buffer_len.push(byte as char),
                 // The ending delimiter of the buffer length.
                 b':' => { break; },
-                // If none matched, return an EOF.
-                _ => { return Err(DecodeError::EOF) }
+                // Default case, when something hadn't been covered.
+                _ => { return Err(self.err_parse()); }
             }
         }
 
@@ -200,7 +191,7 @@ impl<'a> Decoder<'a> {
         let len: usize;
         match buffer_len.parse::<usize>() {
             Ok(l) => len = l,
-            _ => { return Err(DecodeError::ParseError) }
+            _ => { return Err(self.err_parse()); }
         };
 
         // Construct a buffer & read until the length of the buffer.
@@ -212,7 +203,7 @@ impl<'a> Decoder<'a> {
 
     /// Decodes a list at the cursor's current position.
     /// The position points to the list delimiter.
-    fn decode_list(&mut self) -> Result<Value, DecodeError> {
+    fn decode_list(&mut self) -> Result<Value> {
         // Expect the first byte to represent an 'l' character,
         // then advance to the next byte.
         self.expect_byte(b'l')?;
@@ -239,8 +230,8 @@ impl<'a> Decoder<'a> {
                     self.read_byte()?; 
                     break; 
                 },
-                // If none matched, return a parse error.
-                _ => { return Err(DecodeError::ParseError) }
+                // Default case, when something hadn't been covered.
+                _ => { return Err(self.err_parse()); }
             };
 
             list.push(value);
@@ -251,7 +242,7 @@ impl<'a> Decoder<'a> {
 
     /// Decodes a dictionary at the cursor's current position.
     /// The position points to the dictionary delimiter.
-    fn decode_dict(&mut self) -> Result<Value, DecodeError> {
+    fn decode_dict(&mut self) -> Result<Value> {
         // Expect the first byte to represent a 'd' character,
         // then advance to the next byte.
         self.expect_byte(b'd')?;
@@ -274,7 +265,8 @@ impl<'a> Decoder<'a> {
                     self.read_byte()?;
                     break;
                 },
-                _ => { return Err(DecodeError::ParseError) }
+                // Default case, when something hadn't been covered.
+                _ => { return Err(self.err_data()); }
             };
 
             // Expect a value to be at the second position.
@@ -285,17 +277,33 @@ impl<'a> Decoder<'a> {
                 b'0'...b'9' => self.decode_str()?,
                 b'l' => self.decode_list()?,
                 b'd' => self.decode_dict()?,
-                _ => { return Err(DecodeError::ParseError) }
+                _ => { return Err(self.err_data()); }
             };
 
             // Deconstruct the key from the string value & insert it into the map.
             match key {
                 Value::Str(k) => dict.insert(k, value),
-                _ => { return Err(DecodeError::ParseError) }
+                _ => { return Err(self.err_parse()); }
             };
         }
 
         Ok(Value::Dict(dict))
+    }
+
+    fn err_parse(&self) -> Error {
+        Error::new(ErrorCode::ParseError)
+    }
+
+    fn err_data(&self) -> Error {
+        Error::new(ErrorCode::DataError)
+    }
+
+    fn err_unexpected_symbol(&self) -> Error {
+        Error::new(ErrorCode::UnexpectedSymbol)
+    }
+
+    fn err_eof(&self) -> Error {
+        Error::new(ErrorCode::EOF)
     }
 }
 
@@ -304,7 +312,8 @@ impl<'a> Decoder<'a> {
 mod test {
     use std;
     use std::collections::{BTreeMap};
-    use decoder::{Decoder, DecodeError, Value, Bytes};
+    use decoder::{Decoder, Value, Bytes};
+    use ::error::{ErrorCode};
 
     /// Tests the reading, advancing & peeking of data.
     #[test]
@@ -331,8 +340,8 @@ mod test {
         assert_eq!(decoder.data.position() as usize, data.len());
 
         // Reading & peeking at the end should return an error.
-        assert_eq!(decoder.read_byte().unwrap_err(), DecodeError::EOF);
-        assert_eq!(decoder.peek_byte().unwrap_err(), DecodeError::EOF);
+        assert_eq!(decoder.read_byte().unwrap_err().code, ErrorCode::EOF);
+        assert_eq!(decoder.peek_byte().unwrap_err().code, ErrorCode::EOF);
     }
 
     /*
@@ -354,13 +363,13 @@ mod test {
         assert_eq!(Decoder::new("i7580313e").decode_int().unwrap(), Value::Int(7580313));
 
         // Edge cases.
-        assert_eq!(Decoder::new("x1e").decode_int().unwrap_err(), DecodeError::UnexpectedSymbol);
-        assert_eq!(Decoder::new("i321f").decode_int().unwrap_err(), DecodeError::ParseError);
-        assert_eq!(Decoder::new("i-0e").decode_int().unwrap_err(), DecodeError::ParseError);
-        assert_eq!(Decoder::new("i8-3e").decode_int().unwrap_err(), DecodeError::ParseError);
-        assert_eq!(Decoder::new("i0321e").decode_int().unwrap_err(), DecodeError::ParseError);
-        assert_eq!(Decoder::new("i547").decode_int().unwrap_err(), DecodeError::EOF);
-        assert_eq!(Decoder::new("isdfe").decode_int().unwrap_err(), DecodeError::ParseError);
+        assert_eq!(Decoder::new("x1e").decode_int().unwrap_err().code, ErrorCode::UnexpectedSymbol);
+        assert_eq!(Decoder::new("i321f").decode_int().unwrap_err().code, ErrorCode::ParseError);
+        assert_eq!(Decoder::new("i-0e").decode_int().unwrap_err().code, ErrorCode::DataError);
+        assert_eq!(Decoder::new("i8-3e").decode_int().unwrap_err().code, ErrorCode::DataError);
+        assert_eq!(Decoder::new("i0321e").decode_int().unwrap_err().code, ErrorCode::DataError);
+        assert_eq!(Decoder::new("i547").decode_int().unwrap_err().code, ErrorCode::EOF);
+        assert_eq!(Decoder::new("isdfe").decode_int().unwrap_err().code, ErrorCode::ParseError);
     }
 
     /*
@@ -377,9 +386,9 @@ mod test {
         assert_eq!(Decoder::new("10:m4k3s5en5e").decode_str().unwrap(), Value::Str(Bytes::from("m4k3s5en5e")));
 
         // Edge cases.
-        assert_eq!(Decoder::new("4asdf").decode_str().unwrap_err(), DecodeError::EOF);
-        assert_eq!(Decoder::new("10:aa").decode_str().unwrap_err(), DecodeError::EOF);
-        assert_eq!(Decoder::new("asdf").decode_str().unwrap_err(), DecodeError::EOF);
+        assert_eq!(Decoder::new("4asdf").decode_str().unwrap_err().code, ErrorCode::ParseError);
+        assert_eq!(Decoder::new("10:aa").decode_str().unwrap_err().code, ErrorCode::EOF);
+        assert_eq!(Decoder::new("asdf").decode_str().unwrap_err().code, ErrorCode::ParseError);
         assert_eq!(Decoder::new("0:").decode_str().unwrap(), Value::Str(Bytes(vec![])));
     }
 
@@ -428,9 +437,9 @@ mod test {
         // Empty list should return an empty Vec aswell.
         assert_eq!(Decoder::new("le").decode_list().unwrap(), Value::List(vec![]));
         // The errors of other values inside lists happen.
-        assert_eq!(Decoder::new("li-0ee").decode_list().unwrap_err(), DecodeError::ParseError);
-        assert_eq!(Decoder::new("ei783ee").decode_list().unwrap_err(), DecodeError::UnexpectedSymbol);
-        assert_eq!(Decoder::new("li-0e").decode_list().unwrap_err(), DecodeError::ParseError);
+        assert_eq!(Decoder::new("li-0ee").decode_list().unwrap_err().code, ErrorCode::DataError);
+        assert_eq!(Decoder::new("ei783ee").decode_list().unwrap_err().code, ErrorCode::UnexpectedSymbol);
+        assert_eq!(Decoder::new("li-0e").decode_list().unwrap_err().code, ErrorCode::DataError);
     }
 
     /*
@@ -481,10 +490,12 @@ mod test {
         // Edge cases.
         // Empty dictionary should return an empty BTreeMap aswell.
         assert_eq!(Decoder::new("de").decode_dict().unwrap(), Value::Dict(BTreeMap::new()));
-        // A non-string key should return a parse error.
-        assert_eq!(Decoder::new("di35ee").decode_dict().unwrap_err(), DecodeError::ParseError);
-        // An empty key in a dictionary should return a parse error.
-        assert_eq!(Decoder::new("d0:17:iwillnevergetheree").decode_dict().unwrap_err(), DecodeError::ParseError);
+        // A non-string key should return a data error.
+        assert_eq!(Decoder::new("di35ee").decode_dict().unwrap_err().code, ErrorCode::DataError);
+        // An empty key in a dictionary should return a data error.
+        assert_eq!(Decoder::new("d0:17:iwillnevergetheree").decode_dict().unwrap_err().code, ErrorCode::DataError);
+        // An unfinished dictionary should return an EOF error.
+        assert_eq!(Decoder::new("d3:hey99:unfinished").decode_dict().unwrap_err().code, ErrorCode::EOF);
     }
 }
 
