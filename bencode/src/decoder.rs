@@ -1,16 +1,41 @@
 
 //! Bencode decoder.
 
-use std;
 use std::io::{Cursor, Read, BufRead};
 use std::collections::{BTreeMap};
 use std::convert::{From};
+use crate::error::{Error, Result};
 
-use super::error::{Error, Result};
-
+/// Decode is a function, that will decode a slice of string to a bencode value.
+/// It will infer the type of the value, based on the first byte it looks at.
+///
+/// For example, consider this happy path scenario:
+/// ```rust
+/// use bitrust_bencode::decode;
+///
+/// let data = "li32ei8e5:helloe";
+/// decode(&data);
+/// // -> Value::List([32, 8, "hello"])
+/// ```
+/// This automatically inferred the inputted type as a list, with it's mixed contents.
+///
+/// However, note that only the first type in the data will be inferred!
+/// Consider this edge case scenario:
+/// ```rust
+/// use bitrust_bencode::decode;
+///
+/// let data = "i32eli0ee";
+/// decode(&data);
+/// // -> Value::Int(32)
+/// ```
+/// This example included two types - integer and a list afterwards.
+///
+/// As you can see, the data starts with a type integer, that is not interroperable
+/// and cannot contain other types (as lists or dictionary can).
+///
+/// Therefore, the result will always return the first type it can match to.
 pub fn decode(data: &str) -> Result<Value> {
-    // TODO: Make use of decode functions.
-    unimplemented!()
+    Ok(Decoder::new(&data).decode())?
 }
 
 pub fn decode_from<R: std::io::Read + std::io::Seek>(reader: R) -> Result<Value> {
@@ -41,7 +66,7 @@ impl<'a> From<&'a str> for Bytes {
 ///
 /// Dictionary is implemented by a std::collections::BTreeMap,
 /// because the keys have to be sorted as raw strings (not alphanumeric).
-/// It's key is represented by series of bytes & the value can be any bencode value.
+/// It's key is represented by series of bytes & the bencode value.
 #[derive(Debug, PartialEq)]
 pub enum Value {
     Int(i64),
@@ -51,7 +76,7 @@ pub enum Value {
     None
 }
 
-/// Decode is a main struct to decode from bencode data into actual values.
+/// Decoder is a main struct to decode from bencode data into actual values.
 /// It is implemented by a std::io::Cursor, which holds data to a byte slice.
 ///
 /// To use this struct, create a Decoder with "new" function, which converts a string
@@ -67,10 +92,24 @@ struct Decoder<'a> {
 
 impl<'a> Decoder<'a> {
     /// Constructs a new decoder.
+    ///
     /// Accepts data as a string slice,
     /// which then converts it to bytes to the underlying cursor.
     pub fn new(data: &str) -> Decoder {
         Decoder{ data: Cursor::new(data.as_bytes()) }
+    }
+
+    pub fn decode(&mut self) -> Result<Value> {
+        let byte = self.peek_byte()?;
+        let value = match byte {
+            b'i' => self.decode_int()?,
+            b'0'...b'9' => self.decode_str()?,
+            b'l' => self.decode_list()?,
+            b'd' => self.decode_dict()?,
+            _ => { return Err(Error::NonExistingType); }
+        };
+
+        Ok(value)
     }
 
     /// Read and advance from the cursor to the length of a passed buffer
@@ -85,7 +124,7 @@ impl<'a> Decoder<'a> {
     /// Read & advance one byte from the cursor.
     fn read_byte(&mut self) -> Result<u8> {
         let mut buf = [0u8; 1];
-        try!(self.read(&mut buf));
+        self.read(&mut buf)?;
         Ok(buf[0])
     }
 
@@ -287,10 +326,10 @@ impl<'a> Decoder<'a> {
 
 #[cfg(test)]
 mod test {
-    use std;
     use std::collections::{BTreeMap};
-    use decoder::{Decoder, Value, Bytes};
-    use ::error::{Error};
+    use crate::decoder::{Decoder, Value, Bytes};
+    use crate::decode;
+    use crate::error::{Error};
 
     /// Tests the reading, advancing & peeking of data.
     #[test]
@@ -334,19 +373,19 @@ mod test {
     #[test]
     fn decode_int() {
         // Normal cases.
-        assert_eq!(Decoder::new("i78e").decode_int().unwrap(), Value::Int(78));
-        assert_eq!(Decoder::new("i-360e").decode_int().unwrap(), Value::Int(-360));
-        assert_eq!(Decoder::new("i0e").decode_int().unwrap(), Value::Int(0));
-        assert_eq!(Decoder::new("i7580313e").decode_int().unwrap(), Value::Int(7580313));
+        assert_eq!(decode("i78e").unwrap(), Value::Int(78));
+        assert_eq!(decode("i-360e").unwrap(), Value::Int(-360));
+        assert_eq!(decode("i0e").unwrap(), Value::Int(0));
+        assert_eq!(decode("i7580313e").unwrap(), Value::Int(7580313));
 
         // Edge cases.
-        assert_eq!(Decoder::new("x1e").decode_int().unwrap_err(), Error::UnexpectedSymbol);
-        assert_eq!(Decoder::new("i321f").decode_int().unwrap_err(), Error::ParseError);
-        assert_eq!(Decoder::new("i-0e").decode_int().unwrap_err(), Error::DataError);
-        assert_eq!(Decoder::new("i8-3e").decode_int().unwrap_err(), Error::DataError);
-        assert_eq!(Decoder::new("i0321e").decode_int().unwrap_err(), Error::DataError);
-        assert_eq!(Decoder::new("i547").decode_int().unwrap_err(), Error::EOF);
-        assert_eq!(Decoder::new("isdfe").decode_int().unwrap_err(), Error::ParseError);
+        assert_eq!(decode("x1e").unwrap_err(), Error::NonExistingType);
+        assert_eq!(decode("i321f").unwrap_err(), Error::ParseError);
+        assert_eq!(decode("i-0e").unwrap_err(), Error::DataError);
+        assert_eq!(decode("i8-3e").unwrap_err(), Error::DataError);
+        assert_eq!(decode("i0321e").unwrap_err(), Error::DataError);
+        assert_eq!(decode("i547").unwrap_err(), Error::EOF);
+        assert_eq!(decode("isdfe").unwrap_err(), Error::ParseError);
     }
 
     /*
@@ -358,15 +397,15 @@ mod test {
     #[test]
     fn decode_str() {
         // Normal cases.
-        assert_eq!(Decoder::new("4:asdf").decode_str().unwrap(), Value::Str(Bytes::from("asdf")));
-        assert_eq!(Decoder::new("7:bencode").decode_str().unwrap(), Value::Str(Bytes::from("bencode")));
-        assert_eq!(Decoder::new("10:m4k3s5en5e").decode_str().unwrap(), Value::Str(Bytes::from("m4k3s5en5e")));
-        assert_eq!(Decoder::new("0:").decode_str().unwrap(), Value::Str(Bytes(vec![])));
+        assert_eq!(decode("4:asdf").unwrap(), Value::Str(Bytes::from("asdf")));
+        assert_eq!(decode("7:bencode").unwrap(), Value::Str(Bytes::from("bencode")));
+        assert_eq!(decode("10:m4k3s5en5e").unwrap(), Value::Str(Bytes::from("m4k3s5en5e")));
+        assert_eq!(decode("0:").unwrap(), Value::Str(Bytes(vec![])));
 
         // Edge cases.
-        assert_eq!(Decoder::new("4asdf").decode_str().unwrap_err(), Error::ParseError);
-        assert_eq!(Decoder::new("10:aa").decode_str().unwrap_err(), Error::EOF);
-        assert_eq!(Decoder::new("asdf").decode_str().unwrap_err(), Error::ParseError);
+        assert_eq!(decode("4asdf").unwrap_err(), Error::ParseError);
+        assert_eq!(decode("10:aa").unwrap_err(), Error::EOF);
+        assert_eq!(decode("asdf").unwrap_err(), Error::NonExistingType);
     }
 
     /*
@@ -385,20 +424,23 @@ mod test {
             Value::Str(Bytes::from("spam")), 
             Value::Str(Bytes::from("eggs"))
         ];
-        assert_eq!(Decoder::new("l4:spam4:eggse").decode_list().unwrap(), Value::List(data));
+        assert_eq!(decode("l4:spam4:eggse").unwrap(), Value::List(data));
+
         // Strings with integers in them.
         data = vec![
             Value::Str(Bytes::from("m4k3s5en5e")), 
             Value::Str(Bytes::from("bencode"))
         ];
-        assert_eq!(Decoder::new("l10:m4k3s5en5e7:bencodee").decode_list().unwrap(), Value::List(data));
+        assert_eq!(decode("l10:m4k3s5en5e7:bencodee").unwrap(), Value::List(data));
+
         // Mixed content of string and integers.
         data = vec![
             Value::Str(Bytes::from("mixed")), 
             Value::Int(-40), 
             Value::Str(Bytes::from("content"))
         ];
-        assert_eq!(Decoder::new("l5:mixedi-40e7:contente").decode_list().unwrap(), Value::List(data));
+        assert_eq!(decode("l5:mixedi-40e7:contente").unwrap(), Value::List(data));
+
         // More complex mixing of inner lists.
         data = vec![
             Value::Str(Bytes::from("more")), 
@@ -408,15 +450,16 @@ mod test {
             ]), 
             Value::Str(Bytes::from("content"))
         ];
-        assert_eq!(Decoder::new("l4:morel5:mixedi1337ee7:contente").decode_list().unwrap(), Value::List(data));
+        assert_eq!(decode("l4:morel5:mixedi1337ee7:contente").unwrap(), Value::List(data));
+
         // Empty list should return an empty Vec aswell.
-        assert_eq!(Decoder::new("le").decode_list().unwrap(), Value::List(vec![]));
+        assert_eq!(decode("le").unwrap(), Value::List(vec![]));
 
         // Edge cases.
         // The errors of other values inside lists happen.
-        assert_eq!(Decoder::new("li-0ee").decode_list().unwrap_err(), Error::DataError);
-        assert_eq!(Decoder::new("ei783ee").decode_list().unwrap_err(), Error::UnexpectedSymbol);
-        assert_eq!(Decoder::new("li-0e").decode_list().unwrap_err(), Error::DataError);
+        assert_eq!(decode("li-0ee").unwrap_err(), Error::DataError);
+        assert_eq!(decode("ei783ee").unwrap_err(), Error::NonExistingType);
+        assert_eq!(decode("li-0e").unwrap_err(), Error::DataError);
     }
 
     /*
@@ -439,13 +482,14 @@ mod test {
             Value::Str(Bytes::from("value"))
         );
         assert_eq!(
-            Decoder::new("d3:key5:valuee").decode_dict().unwrap(), 
+            decode("d3:key5:valuee").unwrap(), 
             Value::Dict(data)
         );
+
         // Mixed content, dictionary inside a dictionary.
         data = BTreeMap::new();
-        let mut temp_data: BTreeMap<Bytes, Value> = BTreeMap::new();
-        temp_data.insert(
+        let mut data_mixed: BTreeMap<Bytes, Value> = BTreeMap::new();
+        data_mixed.insert(
             Bytes::from("insidemeto"), 
             Value::Int(43)
         );
@@ -456,23 +500,31 @@ mod test {
             )
         );
         data.insert(
-            Bytes::from("content"), 
-            Value::Dict(temp_data)
+            Bytes::from("content"),
+            Value::Dict(data_mixed)
         );
         assert_eq!(
-            Decoder::new("d4:listli3ei-83ee7:contentd10:insidemetoi43eee").decode_dict().unwrap(), 
+            decode("d4:listli3ei-83ee7:contentd10:insidemetoi43eee").unwrap(), 
             Value::Dict(data)
         );
+
         // Empty dictionary should return an empty BTreeMap aswell.
-        assert_eq!(Decoder::new("de").decode_dict().unwrap(), Value::Dict(BTreeMap::new()));
+        assert_eq!(decode("de").unwrap(), Value::Dict(BTreeMap::new()));
     
         // Edge cases.
         // A non-string key should return a parse error.
-        assert_eq!(Decoder::new("di35ee").decode_dict().unwrap_err(), Error::NonStringKey);
+        assert_eq!(decode("di35ee").unwrap_err(), Error::NonStringKey);
         // An empty key in a dictionary should return a parse error.
-        assert_eq!(Decoder::new("d0:17:iwillnevergetheree").decode_dict().unwrap_err(), Error::NonStringKey);
+        assert_eq!(decode("d0:17:iwillnevergetheree").unwrap_err(), Error::NonStringKey);
         // An unfinished dictionary should return an EOF error.
-        assert_eq!(Decoder::new("d3:hey99:unfinished").decode_dict().unwrap_err(), Error::EOF);
+        assert_eq!(decode("d3:hey99:unfinished").unwrap_err(), Error::EOF);
+    }
+
+    #[test]
+    fn decode_first_type_infers() {
+        // Only the first type can be inferred from the string, that contains more than one type,
+        // that are not interoperrable.
+        assert_eq!(decode("i32eli0ee").unwrap(), Value::Int(32));
     }
 }
 
