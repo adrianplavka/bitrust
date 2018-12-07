@@ -10,6 +10,7 @@ categories = ["encoding"]
 readme = "README.md"
 include = ["Cargo.toml", "src/**/*.rs", "README.md", "LICENSE.md"]
 license = "MIT"
+edition = "2018"
 
 [dependencies]
 serde = "1.0"
