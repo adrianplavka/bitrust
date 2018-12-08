@@ -11,4 +11,3 @@ pub use crate::decoder::*;
 
 pub mod error;
 pub mod decoder;
-pub mod de;

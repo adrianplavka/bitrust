@@ -4,6 +4,3 @@ members = [
     "core",
     "bencode"
 ]
-
-[badges]
-travis-ci = { repository = "adrianplavka/bitrust" }
