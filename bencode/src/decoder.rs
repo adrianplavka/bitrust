@@ -26,7 +26,7 @@ use crate::error::{Error, Result};
 ///
 /// let data = "i32eli0ee";
 /// decode(&data);
-/// // -> Value::Int(32)
+/// // -> Value::Integer(32)
 /// ```
 /// This example included two types - integer and a list afterwards.
 ///
@@ -35,6 +35,9 @@ use crate::error::{Error, Result};
 ///
 /// Therefore, the result will always return the first type it can match to.
 pub fn decode(data: &str) -> Result<Value> {
+    if data.len() == 0 {
+        return Ok(Value::None);
+    }
     Ok(Decoder::new(&data).decode())?
 }
 
@@ -57,6 +60,7 @@ impl<'a> From<&'a str> for Bytes {
 ///     - string
 ///     - list
 ///     - dictionary
+///     - none
 ///
 /// Integer is implemented by i64.
 ///
@@ -67,12 +71,14 @@ impl<'a> From<&'a str> for Bytes {
 /// Dictionary is implemented by a std::collections::BTreeMap,
 /// because the keys have to be sorted as raw strings (not alphanumeric).
 /// It's key is represented by series of bytes & the bencode value.
+///
+/// None is not a bencoded value, but it rather represents empty data.
 #[derive(Debug, PartialEq)]
 pub enum Value {
-    Int(i64),
-    Str(Bytes),
+    Integer(i64),
+    String(Bytes),
     List(Vec<Value>),
-    Dict(BTreeMap<Bytes, Value>),
+    Dictionary(BTreeMap<Bytes, Value>),
     None
 }
 
@@ -199,7 +205,7 @@ impl<'a> Decoder<'a> {
 
         // Parse the buffer into an integer.
         match buffer.parse() {
-            Ok(v) => Ok(Value::Int(v)),
+            Ok(v) => Ok(Value::Integer(v)),
             _ => Err(Error::ParseError)
         }
     }
@@ -233,7 +239,7 @@ impl<'a> Decoder<'a> {
         let mut buffer: Vec<u8> = vec![0u8; len];
         self.read(&mut buffer[..])?;
 
-        Ok(Value::Str(Bytes(buffer.to_vec())))
+        Ok(Value::String(Bytes(buffer.to_vec())))
     }
 
     /// Decodes a list at the cursor's current position.
@@ -315,12 +321,12 @@ impl<'a> Decoder<'a> {
 
             // Deconstruct the key from the string value & insert it into the map.
             match key {
-                Value::Str(k) => dict.insert(k, value),
+                Value::String(k) => dict.insert(k, value),
                 _ => { return Err(Error::ParseError); }
             };
         }
 
-        Ok(Value::Dict(dict))
+        Ok(Value::Dictionary(dict))
     }
 }
 
@@ -360,6 +366,11 @@ mod test {
         assert_eq!(decoder.peek_byte().unwrap_err(), Error::EOF);
     }
 
+    #[test]
+    fn decode_empty() {
+        assert_eq!(decode("").unwrap(), Value::None);
+    }
+
     /*
         "Integers are represented by an 'i' followed by the number in base 10 followed by an 'e'. 
         For example i3e corresponds to 3 and i-3e corresponds to -3. 
@@ -373,10 +384,10 @@ mod test {
     #[test]
     fn decode_int() {
         // Normal cases.
-        assert_eq!(decode("i78e").unwrap(), Value::Int(78));
-        assert_eq!(decode("i-360e").unwrap(), Value::Int(-360));
-        assert_eq!(decode("i0e").unwrap(), Value::Int(0));
-        assert_eq!(decode("i7580313e").unwrap(), Value::Int(7580313));
+        assert_eq!(decode("i78e").unwrap(), Value::Integer(78));
+        assert_eq!(decode("i-360e").unwrap(), Value::Integer(-360));
+        assert_eq!(decode("i0e").unwrap(), Value::Integer(0));
+        assert_eq!(decode("i7580313e").unwrap(), Value::Integer(7580313));
 
         // Edge cases.
         assert_eq!(decode("x1e").unwrap_err(), Error::NonExistingType);
@@ -397,10 +408,10 @@ mod test {
     #[test]
     fn decode_str() {
         // Normal cases.
-        assert_eq!(decode("4:asdf").unwrap(), Value::Str(Bytes::from("asdf")));
-        assert_eq!(decode("7:bencode").unwrap(), Value::Str(Bytes::from("bencode")));
-        assert_eq!(decode("10:m4k3s5en5e").unwrap(), Value::Str(Bytes::from("m4k3s5en5e")));
-        assert_eq!(decode("0:").unwrap(), Value::Str(Bytes(vec![])));
+        assert_eq!(decode("4:asdf").unwrap(), Value::String(Bytes::from("asdf")));
+        assert_eq!(decode("7:bencode").unwrap(), Value::String(Bytes::from("bencode")));
+        assert_eq!(decode("10:m4k3s5en5e").unwrap(), Value::String(Bytes::from("m4k3s5en5e")));
+        assert_eq!(decode("0:").unwrap(), Value::String(Bytes(vec![])));
 
         // Edge cases.
         assert_eq!(decode("4asdf").unwrap_err(), Error::ParseError);
@@ -421,34 +432,34 @@ mod test {
         // Normal cases.
         // General case of strings.
         data = vec![
-            Value::Str(Bytes::from("spam")), 
-            Value::Str(Bytes::from("eggs"))
+            Value::String(Bytes::from("spam")), 
+            Value::String(Bytes::from("eggs"))
         ];
         assert_eq!(decode("l4:spam4:eggse").unwrap(), Value::List(data));
 
         // Strings with integers in them.
         data = vec![
-            Value::Str(Bytes::from("m4k3s5en5e")), 
-            Value::Str(Bytes::from("bencode"))
+            Value::String(Bytes::from("m4k3s5en5e")), 
+            Value::String(Bytes::from("bencode"))
         ];
         assert_eq!(decode("l10:m4k3s5en5e7:bencodee").unwrap(), Value::List(data));
 
         // Mixed content of string and integers.
         data = vec![
-            Value::Str(Bytes::from("mixed")), 
-            Value::Int(-40), 
-            Value::Str(Bytes::from("content"))
+            Value::String(Bytes::from("mixed")), 
+            Value::Integer(-40), 
+            Value::String(Bytes::from("content"))
         ];
         assert_eq!(decode("l5:mixedi-40e7:contente").unwrap(), Value::List(data));
 
         // More complex mixing of inner lists.
         data = vec![
-            Value::Str(Bytes::from("more")), 
+            Value::String(Bytes::from("more")), 
             Value::List(vec![
-                Value::Str(Bytes::from("mixed")), 
-                Value::Int(1337)
+                Value::String(Bytes::from("mixed")), 
+                Value::Integer(1337)
             ]), 
-            Value::Str(Bytes::from("content"))
+            Value::String(Bytes::from("content"))
         ];
         assert_eq!(decode("l4:morel5:mixedi1337ee7:contente").unwrap(), Value::List(data));
 
@@ -479,11 +490,11 @@ mod test {
         // General case of strings.
         data.insert(
             Bytes::from("key"), 
-            Value::Str(Bytes::from("value"))
+            Value::String(Bytes::from("value"))
         );
         assert_eq!(
             decode("d3:key5:valuee").unwrap(), 
-            Value::Dict(data)
+            Value::Dictionary(data)
         );
 
         // Mixed content, dictionary inside a dictionary.
@@ -491,25 +502,25 @@ mod test {
         let mut data_mixed: BTreeMap<Bytes, Value> = BTreeMap::new();
         data_mixed.insert(
             Bytes::from("insidemeto"), 
-            Value::Int(43)
+            Value::Integer(43)
         );
         data.insert(
             Bytes::from("list"), 
             Value::List(
-                vec![Value::Int(3), Value::Int(-83)]
+                vec![Value::Integer(3), Value::Integer(-83)]
             )
         );
         data.insert(
             Bytes::from("content"),
-            Value::Dict(data_mixed)
+            Value::Dictionary(data_mixed)
         );
         assert_eq!(
             decode("d4:listli3ei-83ee7:contentd10:insidemetoi43eee").unwrap(), 
-            Value::Dict(data)
+            Value::Dictionary(data)
         );
 
         // Empty dictionary should return an empty BTreeMap aswell.
-        assert_eq!(decode("de").unwrap(), Value::Dict(BTreeMap::new()));
+        assert_eq!(decode("de").unwrap(), Value::Dictionary(BTreeMap::new()));
     
         // Edge cases.
         // A non-string key should return a parse error.
@@ -524,7 +535,7 @@ mod test {
     fn decode_first_type_infers() {
         // Only the first type can be inferred from the string, that contains more than one type,
         // that are not interoperrable.
-        assert_eq!(decode("i32eli0ee").unwrap(), Value::Int(32));
+        assert_eq!(decode("i32eli0ee").unwrap(), Value::Integer(32));
     }
 }
 

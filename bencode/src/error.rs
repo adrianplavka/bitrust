@@ -5,7 +5,6 @@ use std::error;
 use std::fmt::{self, Debug, Display};
 use std::io;
 use std::result;
-
 use serde::de;
 
 /// This type represents all possible errors that can occur.
