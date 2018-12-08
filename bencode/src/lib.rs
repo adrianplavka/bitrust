@@ -4,13 +4,10 @@
 #![allow(unused_variables)]
 #![allow(unused_imports)]
 
-#[macro_use]
-extern crate serde;
-
 #[doc(inline)]
-pub use self::error::{Error, Result};
+pub use crate::error::{Error, Result};
 #[doc(inline)]
-pub use self::decoder::*;
+pub use crate::decoder::*;
 
 pub mod error;
 pub mod decoder;
