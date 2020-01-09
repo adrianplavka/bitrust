@@ -148,12 +148,17 @@ mod de_tests {
         assert_eq!("key", from_str::<&str>(r#"3:key"#).unwrap());
         assert_eq!("asdfg", from_str::<&str>(r#"5:asdfg"#).unwrap());
         assert_eq!("0087", from_str::<&str>(r#"4:0087"#).unwrap());
+        assert_eq!("", from_str::<&str>(r#"0:"#).unwrap());
+        assert_eq!("  ", from_str::<&str>(r#"2:  "#).unwrap());
+        assert_eq!("❤️", from_str::<&str>(r#"6:❤️"#).unwrap());
         assert_eq!(
             "!@#$%^&*()_+{}|:<>?\"/",
             from_str::<&str>(r#"21:!@#$%^&*()_+{}|:<>?"/"#).unwrap()
         );
-        assert_eq!("", from_str::<&str>(r#"0:"#).unwrap());
-        assert_eq!("  ", from_str::<&str>(r#"2:  "#).unwrap());
+        assert_eq!(
+            r#"KR�/[W+x/^nAkW��;T0"#,
+            from_str::<&str>(r#"28:KR�/[W+x/^nAkW��;T0"#).unwrap()
+        );
 
         // Unhappy paths.
         assert_eq!(Err(Error::EOF), from_str::<&str>(r#"4:EOF"#));

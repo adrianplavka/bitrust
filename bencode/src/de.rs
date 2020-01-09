@@ -1,11 +1,12 @@
 //! Bencode deserialization using serde library.
 
+use std::ops::Neg;
+
 use num_traits::{CheckedAdd, CheckedMul};
 use serde::de::{self, DeserializeSeed, MapAccess, SeqAccess, Visitor};
 use serde::Deserialize;
-use std::ops::Neg;
 
-use super::error::{Error, Result};
+use crate::error::{Error, Result};
 
 pub struct Deserializer<'de> {
     /// This string starts with the input data and characters are
@@ -35,18 +36,18 @@ where
 
 impl<'de> Deserializer<'de> {
     /// Peek at the first character in the input without consuming it.
-    fn peek_char(&mut self) -> Result<char> {
-        self.input.chars().next().ok_or(Error::EOF)
+    fn peek_byte(&mut self) -> Result<u8> {
+        self.input.bytes().next().ok_or(Error::EOF)
     }
 
     /// Peek at the n-th character in the input without consuming it.
-    fn peek_char_nth(&mut self, n: usize) -> Result<char> {
-        self.input.chars().nth(n).ok_or(Error::EOF)
+    fn peek_byte_nth(&mut self, n: usize) -> Result<u8> {
+        self.input.bytes().nth(n).ok_or(Error::EOF)
     }
 
     /// Consume the first character in the input.
-    fn next_char(&mut self) -> Result<char> {
-        let ch = self.peek_char()?;
+    fn next_byte(&mut self) -> Result<u8> {
+        let ch = self.peek_byte()?;
         self.input = &self.input[1..];
         Ok(ch)
     }
@@ -60,15 +61,15 @@ impl<'de> Deserializer<'de> {
         let mut is_first_loop = true;
 
         loop {
-            match self.next_char()? {
+            match self.next_byte()? {
                 // Numbers (besides '0'), get added to the final integer.
-                ch @ '1'..='9' => {
+                ch @ b'1'..=b'9' => {
                     integer = match integer.checked_mul(&T::from(10)) {
                         Some(i) => i,
                         _ => return Err(Error::IntegerOverflow),
                     };
 
-                    integer = match integer.checked_add(&T::from(ch as u8 - b'0')) {
+                    integer = match integer.checked_add(&T::from(ch - b'0')) {
                         Some(i) => i,
                         _ => return Err(Error::IntegerOverflow),
                     };
@@ -77,9 +78,9 @@ impl<'de> Deserializer<'de> {
                 // times at the beginning.
                 // It will yield an error, if it happens to be on the beginning,
                 // while there are still some numbers left.
-                '0' => {
-                    let next = self.peek_char()?;
-                    if next != 'e' && is_first_loop {
+                b'0' => {
+                    let next = self.peek_byte()?;
+                    if next != b'e' && is_first_loop {
                         return Err(Error::ExpectedUnsignedInteger);
                     }
 
@@ -89,7 +90,7 @@ impl<'de> Deserializer<'de> {
                     };
                 }
                 // Break the loop, if it's the end of integer.
-                'e' => {
+                b'e' => {
                     // If an end has been occured while the integer is empty,
                     // yield an error (it's not a number).
                     if is_first_loop {
@@ -119,15 +120,15 @@ impl<'de> Deserializer<'de> {
         let mut is_negative = false;
 
         loop {
-            match self.next_char()? {
+            match self.next_byte()? {
                 // Numbers (besides '0') get added to the final integer.
-                ch @ '1'..='9' => {
+                ch @ b'1'..=b'9' => {
                     integer = match integer.checked_mul(&T::from(10)) {
                         Some(i) => i,
                         _ => return Err(Error::IntegerOverflow),
                     };
 
-                    integer = match integer.checked_add(&T::from((ch as u8 - b'0') as i8)) {
+                    integer = match integer.checked_add(&T::from((ch - b'0') as i8)) {
                         Some(i) => i,
                         _ => return Err(Error::IntegerOverflow),
                     };
@@ -136,9 +137,9 @@ impl<'de> Deserializer<'de> {
                 // times at the beginning.
                 // It will yield an error, if it happens to be on the beginning,
                 // while there are still some numbers left.
-                '0' => {
-                    let next = self.peek_char()?;
-                    if next != 'e' && is_first_loop {
+                b'0' => {
+                    let next = self.peek_byte()?;
+                    if next != b'e' && is_first_loop {
                         return Err(Error::ExpectedInteger);
                     }
 
@@ -147,20 +148,21 @@ impl<'de> Deserializer<'de> {
                         _ => return Err(Error::IntegerOverflow),
                     };
                 }
-                '-' => {
+                b'-' => {
                     // Special case to check, if a negative symbol happens to be in
-                    // front of characters '0' or 'e', which are not numbers.
+                    // front of characters '0' or 'e', which are not valid negative
+                    // numbers.
                     // Also, if the symbol happens to appear anywhere except at the
                     // beginning, it will yield an error.
-                    let next = self.peek_char()?;
-                    if next == '0' || next == 'e' || !is_first_loop {
+                    let next = self.peek_byte()?;
+                    if next == b'0' || next == b'e' || !is_first_loop {
                         return Err(Error::ExpectedInteger);
                     }
 
                     is_negative = true;
                 }
                 // Break the loop, if it's the end of integer.
-                'e' => {
+                b'e' => {
                     // If an end has been occured while the integer is empty,
                     // yield an error (it's not a number).
                     if is_first_loop {
@@ -213,9 +215,9 @@ macro_rules! fn_deserialize_unsigned {
         where
             V: Visitor<'de>
         {
-            match self.next_char()? {
-                'i' => {
-                    if self.peek_char()? == '-' {
+            match self.next_byte()? {
+                b'i' => {
+                    if self.peek_byte()? == b'-' {
                         return Err(Error::ExpectedUnsignedInteger);
                     }
                     visitor.$visit(self.parse_unsigned::<$type>()?)
@@ -232,8 +234,8 @@ macro_rules! fn_deserialize_signed {
         where
             V: Visitor<'de>,
         {
-            match self.next_char()? {
-                'i' => visitor.$visit(self.parse_signed::<$type>()?),
+            match self.next_byte()? {
+                b'i' => visitor.$visit(self.parse_signed::<$type>()?),
                 _ => Err(Error::ExpectedInteger),
             }
         }
@@ -260,17 +262,17 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        match self.peek_char()? {
-            '0'..='9' => self.deserialize_str(visitor),
-            'i' => {
-                if self.peek_char_nth(1)? != '-' {
+        match self.peek_byte()? {
+            b'0'..=b'9' => self.deserialize_str(visitor),
+            b'i' => {
+                if self.peek_byte_nth(1)? != b'-' {
                     self.deserialize_u64(visitor)
                 } else {
                     self.deserialize_i64(visitor)
                 }
             }
-            'l' => self.deserialize_seq(visitor),
-            'd' => self.deserialize_map(visitor),
+            b'l' => self.deserialize_seq(visitor),
+            b'd' => self.deserialize_map(visitor),
             _ => Err(Error::UnknownType),
         }
     }
@@ -295,6 +297,9 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
     fn_deserialize_unsigned!(deserialize_u16, visit_u16, u16);
     fn_deserialize_unsigned!(deserialize_u32, visit_u32, u32);
     fn_deserialize_unsigned!(deserialize_u64, visit_u64, u64);
+    serde::serde_if_integer128! {
+        fn_deserialize_unsigned!(deserialize_u128, visit_u128, u128);
+    }
 
     /// Method definitions for various signed deserializations.
     ///
@@ -308,13 +313,16 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
     fn_deserialize_signed!(deserialize_i16, visit_i16, i16);
     fn_deserialize_signed!(deserialize_i32, visit_i32, i32);
     fn_deserialize_signed!(deserialize_i64, visit_i64, i64);
+    serde::serde_if_integer128! {
+        fn_deserialize_signed!(deserialize_i128, visit_i128, i128);
+    }
 
     fn deserialize_str<V>(self, visitor: V) -> Result<V::Value>
     where
         V: Visitor<'de>,
     {
-        match self.peek_char()? {
-            '0'..='9' => visitor.visit_borrowed_str(self.parse_string()?),
+        match self.peek_byte()? {
+            b'0'..=b'9' => visitor.visit_borrowed_str(self.parse_string()?),
             _ => Err(Error::ExpectedStringIntegerLength),
         }
     }
@@ -339,10 +347,10 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        match self.next_char()? {
-            'l' => {
+        match self.next_byte()? {
+            b'l' => {
                 let value = visitor.visit_seq(ListDeserializer::new(&mut self))?;
-                if self.next_char()? != 'e' {
+                if self.next_byte()? != b'e' {
                     return Err(Error::ExpectedListEnd);
                 }
 
@@ -377,10 +385,10 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        match self.next_char()? {
-            'd' => {
+        match self.next_byte()? {
+            b'd' => {
                 let value = visitor.visit_map(DictionaryDeserializer::new(&mut self))?;
-                if self.next_char()? != 'e' {
+                if self.next_byte()? != b'e' {
                     return Err(Error::ExpectedDictionaryEnd);
                 }
 
@@ -427,7 +435,7 @@ impl<'de, 'a> SeqAccess<'de> for ListDeserializer<'a, 'de> {
     where
         T: DeserializeSeed<'de>,
     {
-        if self.de.peek_char()? == 'e' {
+        if self.de.peek_byte()? == b'e' {
             return Ok(None);
         }
 
@@ -453,9 +461,9 @@ impl<'de, 'a> MapAccess<'de> for DictionaryDeserializer<'a, 'de> {
     where
         K: DeserializeSeed<'de>,
     {
-        match self.de.peek_char()? {
-            'e' => return Ok(None),
-            '0'..='9' => {}
+        match self.de.peek_byte()? {
+            b'e' => return Ok(None),
+            b'0'..=b'9' => {}
             _ => return Err(Error::ExpectedDictionaryKeyString),
         };
 

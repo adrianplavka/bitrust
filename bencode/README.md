@@ -7,4 +7,4 @@ This package should provide seamless Bencode serialization & deserialization of 
 **Current state:**
 
 - [x] deserialization
-- [ ] serialization **(currently in progress)**
+- [x] serialization

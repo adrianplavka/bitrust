@@ -1,11 +1,12 @@
 //! Bencode errors and result type for serialization & deserialization.
 
-use serde::de;
-use serde::ser;
 use std::error;
 use std::fmt::{self, Debug, Display};
 use std::io;
 use std::result;
+
+use serde::de;
+use serde::ser;
 
 /// This type represents all possible errors that can occur during Bencode
 /// serialization & deserialization.
@@ -70,11 +71,7 @@ pub enum Error {
 /// Typedef for `Result` with an own error implementation.
 pub type Result<T> = result::Result<T, Error>;
 
-impl error::Error for Error {
-    fn description(&self) -> &str {
-        "bitrust_bencode error"
-    }
-}
+impl error::Error for Error {}
 
 impl From<Error> for io::Error {
     fn from(e: Error) -> Self {
