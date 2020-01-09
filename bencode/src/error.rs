@@ -1,4 +1,4 @@
-//! Bencode errors during encoding & decoding, and serialization & deserialization.
+//! Bencode errors and result type for serialization & deserialization.
 
 use serde::de;
 use serde::ser;
@@ -7,44 +7,63 @@ use std::fmt::{self, Debug, Display};
 use std::io;
 use std::result;
 
-/// This type represents all possible errors that can occur during serialization & deserialization.
+/// This type represents all possible errors that can occur during Bencode
+/// serialization & deserialization.
 #[derive(PartialEq)]
 pub enum Error {
-    /// Catchall for deserialization & serialization error messages.
+    /// Catch-all for deserialization & serialization error messages.
     Message(Box<str>),
 
-    /// ExpectedInteger occurs, when an unsigned integer was expected during serialization or deserialization.
+    /// ExpectedInteger occurs, when a signed integer was expected at the position
+    /// during deserialization.
     ExpectedInteger,
 
+    /// ExpectedUnsignedInteger occurs, when an unsigned integer was expected at
+    /// the position during deserialization.
+    ExpectedUnsignedInteger,
+
+    /// IntegerOverflow occurs, when an integer overflows during deserialization
+    /// of a type smaller than integer input.
+    IntegerOverflow,
+
+    /// ExpectedStringIntegerLength occurs, when a length of string has not been
+    /// specified, or is of an unappropriate type during deserialization.
     ExpectedStringIntegerLength,
 
-    ExpectedListEnd,
-
-    ExpectedMapEnd,
-
-    ExpectedMapKeyString,
-
-    /// ParseError occurs, when a match case hadn't been covered in a parsing stage.
-    ParseError,
-
+    /// ParseStringIntegerLengthError occurs, when parsing length of string has
+    /// failed during deserialization.
     ParseStringIntegerLengthError,
 
-    /// DataError occurs, when data are semantically incorrect.
-    DataError,
+    /// ExpectedList occurs, when a list was expected at the position during
+    /// deserialization.
+    ExpectedList,
 
-    // NonExistingType occurs, when the data is impossible to infer from.
-    NonExistingType,
+    /// ExpectedListEnd occurs, when a list's end was expected at the position during
+    /// deserialization.
+    ExpectedListEnd,
 
-    /// UnexpectedSymbol occurs, when a specific symbol hadn't been expected.
-    UnexpectedSymbol,
+    /// ExpectedDictionary occurs, when a dictionary was expected at the position
+    /// during deserialization.
+    ExpectedDictionary,
 
-    /// NonStringKey occurs, when a key in a dictionary is not a string.
-    NonStringKey,
+    /// ExpectedDictionaryEnd occurs, when a dictionary's end was expected at the
+    /// position during deserialization.
+    ExpectedDictionaryEnd,
 
-    /// TrailingCharacter occurs, when the input in deserializing contains additional trailing characters.
+    /// ExpectedDictionaryKeyString occurs, when dictionary's key has not been
+    /// specified, or is of an unappropriate type during deserialization.
+    ExpectedDictionaryKeyString,
+
+    /// UnknownType occurs, when the data is impossible to infer from during
+    /// deserialization.
+    UnknownType,
+
+    /// TrailingCharacter occurs, when the input contains additional trailing
+    /// characters after deserializing.
     TrailingCharacters,
 
-    /// EOF occurs, when reading from a stream of bytes hits an unexpected end.
+    /// EOF occurs, when reading from an input hits an unexpected end during
+    /// deserialization.
     EOF,
 }
 
@@ -62,17 +81,17 @@ impl From<Error> for io::Error {
         match e {
             Error::Message(_)
             | Error::ExpectedInteger
-            | Error::ParseError
-            | Error::DataError
+            | Error::ExpectedUnsignedInteger
+            | Error::IntegerOverflow
             | Error::ExpectedStringIntegerLength
             | Error::ParseStringIntegerLengthError
+            | Error::ExpectedList
             | Error::ExpectedListEnd
-            | Error::ExpectedMapEnd
-            | Error::ExpectedMapKeyString
-            | Error::NonExistingType
-            | Error::UnexpectedSymbol
-            | Error::TrailingCharacters
-            | Error::NonStringKey => io::Error::new(io::ErrorKind::InvalidData, e),
+            | Error::ExpectedDictionary
+            | Error::ExpectedDictionaryEnd
+            | Error::ExpectedDictionaryKeyString
+            | Error::UnknownType
+            | Error::TrailingCharacters => io::Error::new(io::ErrorKind::InvalidData, e),
             Error::EOF => io::Error::new(io::ErrorKind::UnexpectedEof, e),
         }
     }
@@ -82,21 +101,33 @@ impl Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
             Error::Message(ref m) => f.write_str(m),
-            Error::ExpectedInteger => f.write_str("expected integer error occured"),
-            Error::ParseError => f.write_str("parsing error occured"),
-            Error::DataError => f.write_str("data error occured"),
-            Error::ExpectedStringIntegerLength => f.write_str("expected string integer length"),
-            Error::ParseStringIntegerLengthError => {
-                f.write_str("parse of string integer length error")
+            Error::ExpectedInteger => f.write_str("[bitrust_bencode error]: expected integer"),
+            Error::ExpectedUnsignedInteger => {
+                f.write_str("[bitrust_bencode error]: expected unsigned integer")
             }
-            Error::ExpectedListEnd => f.write_str("expected list end"),
-            Error::ExpectedMapEnd => f.write_str("expected map end"),
-            Error::ExpectedMapKeyString => f.write_str("expected map key string"),
-            Error::NonExistingType => f.write_str("non existing type occured"),
-            Error::UnexpectedSymbol => f.write_str("unexpected symbol occured"),
-            Error::NonStringKey => f.write_str("non string key in a dictionary occured"),
-            Error::TrailingCharacters => f.write_str("trailing characters occurder"),
-            Error::EOF => f.write_str("unexpected end occured"),
+            Error::IntegerOverflow => f.write_str("[bitrust_bencode error]: integer overflow"),
+            Error::ExpectedStringIntegerLength => {
+                f.write_str("[bitrust_bencode error]: expected string's integer length")
+            }
+            Error::ParseStringIntegerLengthError => {
+                f.write_str("[bitrust_bencode error]: unable to parse string's integer length")
+            }
+            Error::ExpectedList => f.write_str("[bitrust_bencode error]: expected list"),
+            Error::ExpectedListEnd => f.write_str("[bitrust_bencode error]: expected list's end"),
+            Error::ExpectedDictionary => {
+                f.write_str("[bitrust_bencode error]: expected dictionary")
+            }
+            Error::ExpectedDictionaryEnd => {
+                f.write_str("[bitrust_bencode error]: expected dictionary's end")
+            }
+            Error::ExpectedDictionaryKeyString => {
+                f.write_str("[bitrust_bencode error]: expected dictionary's key string")
+            }
+            Error::UnknownType => f.write_str("[bitrust_bencode error]: unknown type"),
+            Error::TrailingCharacters => {
+                f.write_str("[bitrust_bencode error]: trailing characters")
+            }
+            Error::EOF => f.write_str("[bitrust_bencode error]: unexpected end"),
         }
     }
 }

@@ -1,17 +1,15 @@
-//! Bencode deserializer using serde library.
+//! Bencode deserialization using serde library.
 
-use serde::de::{
-    self, DeserializeSeed, EnumAccess, IntoDeserializer, MapAccess, SeqAccess, VariantAccess,
-    Visitor,
-};
+use num_traits::{CheckedAdd, CheckedMul};
+use serde::de::{self, DeserializeSeed, MapAccess, SeqAccess, Visitor};
 use serde::Deserialize;
-use std::ops::{AddAssign, MulAssign, Neg};
+use std::ops::Neg;
 
 use super::error::{Error, Result};
 
 pub struct Deserializer<'de> {
-    // This string starts with the input data
-    // and characters are truncated off the beginning, as data is parsed.
+    /// This string starts with the input data and characters are
+    /// truncated off the beginning, as data is being parsed.
     input: &'de str,
 }
 
@@ -28,73 +26,80 @@ where
     let mut deserializer = Deserializer::from_str(s);
     let t = T::deserialize(&mut deserializer)?;
 
-    if deserializer.input.is_empty() {
-        Ok(t)
-    } else {
+    if !deserializer.input.is_empty() {
         Err(Error::TrailingCharacters)
+    } else {
+        Ok(t)
     }
 }
 
 impl<'de> Deserializer<'de> {
-    // Look at the first character in the input without consuming it.
+    /// Peek at the first character in the input without consuming it.
     fn peek_char(&mut self) -> Result<char> {
         self.input.chars().next().ok_or(Error::EOF)
     }
 
-    // Look at the n-th character in the input without consuming it.
+    /// Peek at the n-th character in the input without consuming it.
     fn peek_char_nth(&mut self, n: usize) -> Result<char> {
         self.input.chars().nth(n).ok_or(Error::EOF)
     }
 
-    // Consume the first character in the input.
+    /// Consume the first character in the input.
     fn next_char(&mut self) -> Result<char> {
         let ch = self.peek_char()?;
-        self.input = &self.input[ch.len_utf8()..];
+        self.input = &self.input[1..];
         Ok(ch)
     }
 
-    // Parse the Bencode integer value.
+    /// Parse the Bencode unsigned integer value.
     fn parse_unsigned<T>(&mut self) -> Result<T>
     where
-        T: AddAssign<T> + MulAssign<T> + From<u8>,
+        T: CheckedAdd + CheckedMul + From<u8>,
     {
         let mut integer = T::from(0);
         let mut is_first_loop = true;
 
         loop {
-            match self.input.chars().next() {
-                // Numbers, besides '0', get added to the final integer.
-                Some(ch @ '1'..='9') => {
-                    self.input = &self.input[1..];
+            match self.next_char()? {
+                // Numbers (besides '0'), get added to the final integer.
+                ch @ '1'..='9' => {
+                    integer = match integer.checked_mul(&T::from(10)) {
+                        Some(i) => i,
+                        _ => return Err(Error::IntegerOverflow),
+                    };
 
-                    integer *= T::from(10);
-                    integer += T::from(ch as u8 - b'0');
+                    integer = match integer.checked_add(&T::from(ch as u8 - b'0')) {
+                        Some(i) => i,
+                        _ => return Err(Error::IntegerOverflow),
+                    };
                 }
-                // Character '0' will yield an error, if it happens to be on the beginning,
+                // Number '0' is treated differently, as it cannot occur multiple
+                // times at the beginning.
+                // It will yield an error, if it happens to be on the beginning,
                 // while there are still some numbers left.
-                Some(ch @ '0') => {
-                    self.input = &self.input[1..];
-
+                '0' => {
                     let next = self.peek_char()?;
                     if next != 'e' && is_first_loop {
-                        return Err(Error::ExpectedInteger);
+                        return Err(Error::ExpectedUnsignedInteger);
                     }
 
-                    integer *= T::from(10);
+                    integer = match integer.checked_mul(&T::from(10)) {
+                        Some(i) => i,
+                        _ => return Err(Error::IntegerOverflow),
+                    };
                 }
                 // Break the loop, if it's the end of integer.
-                Some('e') => {
-                    self.input = &self.input[1..];
-
-                    // If an end has been occured while the integer is empty, yield an error (it's not a number).
+                'e' => {
+                    // If an end has been occured while the integer is empty,
+                    // yield an error (it's not a number).
                     if is_first_loop {
-                        return Err(Error::ExpectedInteger);
+                        return Err(Error::ExpectedUnsignedInteger);
                     }
                     break;
                 }
-                // Default case, when something hadn't been covered.
+                // If an non-expecting character has been found.
                 _ => {
-                    return Err(Error::ExpectedInteger);
+                    return Err(Error::ExpectedUnsignedInteger);
                 }
             }
 
@@ -104,38 +109,49 @@ impl<'de> Deserializer<'de> {
         Ok(integer)
     }
 
+    /// Parse the Bencode signed integer value.
     fn parse_signed<T>(&mut self) -> Result<T>
     where
-        T: Neg<Output = T> + AddAssign<T> + MulAssign<T> + From<i8>,
+        T: Neg<Output = T> + CheckedAdd + CheckedMul + From<i8>,
     {
         let mut integer = T::from(0);
         let mut is_first_loop = true;
         let mut is_negative = false;
 
         loop {
-            match self.input.chars().next() {
-                // Numbers, besides '0', get added to the final integer.
-                Some(ch @ '1'..='9') => {
-                    self.input = &self.input[1..];
+            match self.next_char()? {
+                // Numbers (besides '0') get added to the final integer.
+                ch @ '1'..='9' => {
+                    integer = match integer.checked_mul(&T::from(10)) {
+                        Some(i) => i,
+                        _ => return Err(Error::IntegerOverflow),
+                    };
 
-                    integer *= T::from(10);
-                    integer += T::from((ch as u8 - b'0') as i8);
+                    integer = match integer.checked_add(&T::from((ch as u8 - b'0') as i8)) {
+                        Some(i) => i,
+                        _ => return Err(Error::IntegerOverflow),
+                    };
                 }
-                // Character '0' will yield an error, if it happens to be on the beginning,
+                // Number '0' is treated differently, as it cannot occur multiple
+                // times at the beginning.
+                // It will yield an error, if it happens to be on the beginning,
                 // while there are still some numbers left.
-                Some(ch @ '0') => {
-                    self.input = &self.input[1..];
-
+                '0' => {
                     let next = self.peek_char()?;
                     if next != 'e' && is_first_loop {
                         return Err(Error::ExpectedInteger);
                     }
 
-                    integer *= T::from(10);
+                    integer = match integer.checked_mul(&T::from(10)) {
+                        Some(i) => i,
+                        _ => return Err(Error::IntegerOverflow),
+                    };
                 }
-                Some('-') => {
-                    self.input = &self.input[1..];
-
+                '-' => {
+                    // Special case to check, if a negative symbol happens to be in
+                    // front of characters '0' or 'e', which are not numbers.
+                    // Also, if the symbol happens to appear anywhere except at the
+                    // beginning, it will yield an error.
                     let next = self.peek_char()?;
                     if next == '0' || next == 'e' || !is_first_loop {
                         return Err(Error::ExpectedInteger);
@@ -144,16 +160,15 @@ impl<'de> Deserializer<'de> {
                     is_negative = true;
                 }
                 // Break the loop, if it's the end of integer.
-                Some('e') => {
-                    self.input = &self.input[1..];
-
-                    // If an end has been occured while the integer is empty, yield an error (it's not a number).
+                'e' => {
+                    // If an end has been occured while the integer is empty,
+                    // yield an error (it's not a number).
                     if is_first_loop {
                         return Err(Error::ExpectedInteger);
                     }
                     break;
                 }
-                // Default case, when something hadn't been covered.
+                // If an non-expecting character has been found.
                 _ => {
                     return Err(Error::ExpectedInteger);
                 }
@@ -165,15 +180,20 @@ impl<'de> Deserializer<'de> {
         Ok(if is_negative { -integer } else { integer })
     }
 
-    // Parse the Bencode string value.
+    /// Parse the Bencode string value.
     fn parse_string(&mut self) -> Result<&'de str> {
         match self.input.find(':') {
             Some(idx) => {
+                // Retrieve the length of the string as number from the
+                // beginning of a string.
                 let length = match self.input[..idx].parse::<usize>() {
                     Ok(l) => l,
                     _ => return Err(Error::ParseStringIntegerLengthError),
                 };
 
+                // If length of the string is bigger than the input itself,
+                // it could result into an array out of bounds error.
+                // Yields an unexpected end error.
                 if length > self.input[idx + 1..].len() {
                     return Err(Error::EOF);
                 }
@@ -187,12 +207,55 @@ impl<'de> Deserializer<'de> {
     }
 }
 
+macro_rules! fn_deserialize_unsigned {
+    ($method:ident, $visit:ident, $type:ty) => {
+        fn $method<V>(self, visitor: V) -> Result<V::Value>
+        where
+            V: Visitor<'de>
+        {
+            match self.next_char()? {
+                'i' => {
+                    if self.peek_char()? == '-' {
+                        return Err(Error::ExpectedUnsignedInteger);
+                    }
+                    visitor.$visit(self.parse_unsigned::<$type>()?)
+                }
+                _ => Err(Error::ExpectedUnsignedInteger),
+            }
+        }
+    };
+}
+
+macro_rules! fn_deserialize_signed {
+    ($method:ident, $visit:ident, $type:ty) => {
+        fn $method<V>(self, visitor: V) -> Result<V::Value>
+        where
+            V: Visitor<'de>,
+        {
+            match self.next_char()? {
+                'i' => visitor.$visit(self.parse_signed::<$type>()?),
+                _ => Err(Error::ExpectedInteger),
+            }
+        }
+    };
+}
+
 impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
     type Error = Error;
 
-    // Look at the input data to decide what Serde data model type to
-    // deserialize as. Not all data formats are able to support this operation.
-    // Formats that support `deserialize_any` are known as self-describing.
+    /// Look at the input data to decide, what Serde data model type to deserialize as.
+    /// It will infer a Bencode type based on starting characters, useful when no
+    /// type was provided to "from_*" deserialization functions.
+    ///
+    /// Integers will be always deserialized to unsigned or signed type, depending on
+    /// a knowledge, if unparsed integer starts with a '-':
+    ///     - If it doesn't, the type of integer will be `u64`.
+    ///     - If it does, the type of integer will be `i64`.
+    ///
+    /// Not all data formats are able to support this operation & will result in an
+    /// UnknownType error.
+    ///
+    /// Can return errors when deserializing types.
     fn deserialize_any<V>(self, visitor: V) -> Result<V::Value>
     where
         V: Visitor<'de>,
@@ -208,81 +271,64 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
             }
             'l' => self.deserialize_seq(visitor),
             'd' => self.deserialize_map(visitor),
-            _ => Err(Error::NonExistingType),
+            _ => Err(Error::UnknownType),
         }
     }
-    fn deserialize_u8<V>(self, visitor: V) -> Result<V::Value>
+
+    /// See `Deserializer::deserialize_any` method.
+    fn deserialize_ignored_any<V>(self, visitor: V) -> Result<V::Value>
     where
         V: Visitor<'de>,
     {
-        self.next_char()?;
-        visitor.visit_u8(self.parse_unsigned::<u8>()?)
+        self.deserialize_any(visitor)
     }
 
-    fn deserialize_u16<V>(self, visitor: V) -> Result<V::Value>
-    where
-        V: Visitor<'de>,
-    {
-        self.next_char()?;
-        visitor.visit_u16(self.parse_unsigned::<u16>()?)
-    }
+    /// Method definitions for various unsigned deserializations.
+    ///
+    /// Every definition guarantees, that it will use the appropriate type when
+    /// deserializing, saving it from using bigger, unnecessary unsigned types.
+    ///
+    /// This can overflow, if an input has a bigger size than expected type.
+    ///
+    /// Can return errors when deserializing unsigned types.
+    fn_deserialize_unsigned!(deserialize_u8, visit_u8, u8);
+    fn_deserialize_unsigned!(deserialize_u16, visit_u16, u16);
+    fn_deserialize_unsigned!(deserialize_u32, visit_u32, u32);
+    fn_deserialize_unsigned!(deserialize_u64, visit_u64, u64);
 
-    fn deserialize_u32<V>(self, visitor: V) -> Result<V::Value>
-    where
-        V: Visitor<'de>,
-    {
-        self.next_char()?;
-        visitor.visit_u32(self.parse_unsigned::<u32>()?)
-    }
-
-    fn deserialize_u64<V>(self, visitor: V) -> Result<V::Value>
-    where
-        V: Visitor<'de>,
-    {
-        self.next_char()?;
-        visitor.visit_u64(self.parse_unsigned::<u64>()?)
-    }
-
-    fn deserialize_i8<V>(self, visitor: V) -> Result<V::Value>
-    where
-        V: Visitor<'de>,
-    {
-        self.next_char()?;
-        visitor.visit_i8(self.parse_signed::<i8>()?)
-    }
-
-    fn deserialize_i16<V>(self, visitor: V) -> Result<V::Value>
-    where
-        V: Visitor<'de>,
-    {
-        self.next_char()?;
-        visitor.visit_i16(self.parse_signed::<i16>()?)
-    }
-
-    fn deserialize_i32<V>(self, visitor: V) -> Result<V::Value>
-    where
-        V: Visitor<'de>,
-    {
-        self.next_char()?;
-        visitor.visit_i32(self.parse_signed::<i32>()?)
-    }
-
-    fn deserialize_i64<V>(self, visitor: V) -> Result<V::Value>
-    where
-        V: Visitor<'de>,
-    {
-        self.next_char()?;
-        visitor.visit_i64(self.parse_signed::<i64>()?)
-    }
+    /// Method definitions for various signed deserializations.
+    ///
+    /// Every definition guarantees, that it will use the appropriate type when
+    /// deserializing, saving it from using bigger, unnecessary signed types.
+    ///
+    /// This can overflow, if an input has a bigger size than expected type.
+    ///
+    /// Can return errors when deserializing signed types.
+    fn_deserialize_signed!(deserialize_i8, visit_i8, i8);
+    fn_deserialize_signed!(deserialize_i16, visit_i16, i16);
+    fn_deserialize_signed!(deserialize_i32, visit_i32, i32);
+    fn_deserialize_signed!(deserialize_i64, visit_i64, i64);
 
     fn deserialize_str<V>(self, visitor: V) -> Result<V::Value>
     where
         V: Visitor<'de>,
     {
-        visitor.visit_borrowed_str(self.parse_string()?)
+        match self.peek_char()? {
+            '0'..='9' => visitor.visit_borrowed_str(self.parse_string()?),
+            _ => Err(Error::ExpectedStringIntegerLength),
+        }
     }
 
+    /// See `Deserializer::deserialize_str` method.
     fn deserialize_string<V>(self, visitor: V) -> Result<V::Value>
+    where
+        V: Visitor<'de>,
+    {
+        self.deserialize_str(visitor)
+    }
+
+    /// See `Deserializer::deserialize_str` method.
+    fn deserialize_identifier<V>(self, visitor: V) -> Result<V::Value>
     where
         V: Visitor<'de>,
     {
@@ -293,16 +339,20 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        self.next_char()?;
-        let value = visitor.visit_seq(ListDeserializer::new(&mut self))?;
+        match self.next_char()? {
+            'l' => {
+                let value = visitor.visit_seq(ListDeserializer::new(&mut self))?;
+                if self.next_char()? != 'e' {
+                    return Err(Error::ExpectedListEnd);
+                }
 
-        if self.next_char()? != 'e' {
-            return Err(Error::ExpectedListEnd);
+                Ok(value)
+            }
+            _ => Err(Error::ExpectedList),
         }
-
-        Ok(value)
     }
 
+    /// See `Deserializer::deserialize_seq` method.
     fn deserialize_tuple<V>(self, _len: usize, visitor: V) -> Result<V::Value>
     where
         V: Visitor<'de>,
@@ -310,6 +360,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
         self.deserialize_seq(visitor)
     }
 
+    /// See `Deserializer::deserialize_seq` method.
     fn deserialize_tuple_struct<V>(
         self,
         _name: &'static str,
@@ -326,16 +377,20 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        self.next_char()?;
-        let value = visitor.visit_map(MapDeserializer::new(&mut self))?;
+        match self.next_char()? {
+            'd' => {
+                let value = visitor.visit_map(DictionaryDeserializer::new(&mut self))?;
+                if self.next_char()? != 'e' {
+                    return Err(Error::ExpectedDictionaryEnd);
+                }
 
-        if self.next_char()? != 'e' {
-            return Err(Error::ExpectedMapEnd);
+                Ok(value)
+            }
+            _ => Err(Error::ExpectedDictionary),
         }
-
-        Ok(value)
     }
 
+    /// See `Deserializer::deserialize_map` method.
     fn deserialize_struct<V>(
         self,
         _name: &'static str,
@@ -346,20 +401,6 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
         V: Visitor<'de>,
     {
         self.deserialize_map(visitor)
-    }
-
-    fn deserialize_identifier<V>(self, visitor: V) -> Result<V::Value>
-    where
-        V: Visitor<'de>,
-    {
-        self.deserialize_str(visitor)
-    }
-
-    fn deserialize_ignored_any<V>(self, visitor: V) -> Result<V::Value>
-    where
-        V: Visitor<'de>,
-    {
-        self.deserialize_any(visitor)
     }
 
     serde::forward_to_deserialize_any! {
@@ -395,17 +436,17 @@ impl<'de, 'a> SeqAccess<'de> for ListDeserializer<'a, 'de> {
     }
 }
 
-struct MapDeserializer<'a, 'de: 'a> {
+struct DictionaryDeserializer<'a, 'de: 'a> {
     de: &'a mut Deserializer<'de>,
 }
 
-impl<'a, 'de> MapDeserializer<'a, 'de> {
+impl<'a, 'de> DictionaryDeserializer<'a, 'de> {
     fn new(de: &'a mut Deserializer<'de>) -> Self {
-        MapDeserializer { de }
+        DictionaryDeserializer { de }
     }
 }
 
-impl<'de, 'a> MapAccess<'de> for MapDeserializer<'a, 'de> {
+impl<'de, 'a> MapAccess<'de> for DictionaryDeserializer<'a, 'de> {
     type Error = Error;
 
     fn next_key_seed<K>(&mut self, seed: K) -> Result<Option<K::Value>>
@@ -415,8 +456,8 @@ impl<'de, 'a> MapAccess<'de> for MapDeserializer<'a, 'de> {
         match self.de.peek_char()? {
             'e' => return Ok(None),
             '0'..='9' => {}
-            _ => return Err(Error::ExpectedMapKeyString),
-        }
+            _ => return Err(Error::ExpectedDictionaryKeyString),
+        };
 
         // Deserialize a map key.
         seed.deserialize(&mut *self.de).map(Some)
@@ -428,170 +469,5 @@ impl<'de, 'a> MapAccess<'de> for MapDeserializer<'a, 'de> {
     {
         // Deserialize a map value.
         seed.deserialize(&mut *self.de)
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use crate::de::from_str;
-    use crate::error::Error;
-    use serde::{Deserialize, Serialize};
-
-    #[test]
-    fn test_basic_de_integers() {
-        // Happy paths.
-        assert_eq!(0usize, from_str(r#"i0e"#).unwrap());
-        assert_eq!(0isize, from_str(r#"i0e"#).unwrap());
-        assert_eq!(1usize, from_str(r#"i1e"#).unwrap());
-        assert_eq!(1isize, from_str(r#"i1e"#).unwrap());
-        assert_eq!(123usize, from_str(r#"i123e"#).unwrap());
-        assert_eq!(123isize, from_str(r#"i123e"#).unwrap());
-        assert_eq!(-0, from_str(r#"i0e"#).unwrap());
-        assert_eq!(-1, from_str(r#"i-1e"#).unwrap());
-        assert_eq!(-123, from_str(r#"i-123e"#).unwrap());
-        assert_eq!(
-            std::i8::MAX,
-            from_str(format!("i{}e", std::i8::MAX).as_str()).unwrap()
-        );
-        assert_eq!(
-            std::i16::MAX,
-            from_str(format!("i{}e", std::i16::MAX).as_str()).unwrap()
-        );
-        assert_eq!(
-            std::i32::MAX,
-            from_str(format!("i{}e", std::i32::MAX).as_str()).unwrap()
-        );
-        assert_eq!(
-            std::i64::MAX,
-            from_str(format!("i{}e", std::i64::MAX).as_str()).unwrap()
-        );
-        assert_eq!(
-            std::u8::MAX,
-            from_str(format!("i{}e", std::u8::MAX).as_str()).unwrap()
-        );
-        assert_eq!(
-            std::u16::MAX,
-            from_str(format!("i{}e", std::u16::MAX).as_str()).unwrap()
-        );
-        assert_eq!(
-            std::u32::MAX,
-            from_str(format!("i{}e", std::u32::MAX).as_str()).unwrap()
-        );
-        assert_eq!(
-            std::u64::MAX,
-            from_str(format!("i{}e", std::u64::MAX).as_str()).unwrap()
-        );
-
-        // Unhappy paths.
-        assert_eq!(Err(Error::ExpectedInteger), from_str::<usize>(r#"ie"#));
-        assert_eq!(Err(Error::ExpectedInteger), from_str::<usize>(r#"i-0e"#));
-        assert_eq!(Err(Error::ExpectedInteger), from_str::<usize>(r#"i1-23e"#));
-        assert_eq!(Err(Error::ExpectedInteger), from_str::<usize>(r#"iasdfe"#));
-        assert_eq!(Err(Error::ExpectedInteger), from_str::<usize>(r#"i e"#));
-        assert_eq!(
-            Err(Error::ExpectedInteger),
-            from_str::<usize>(r#"i123.456e"#)
-        );
-        assert_eq!(
-            Err(Error::ExpectedInteger),
-            from_str::<usize>(r#"i-1.034e"#)
-        );
-        assert_eq!(
-            Err(Error::TrailingCharacters),
-            from_str::<usize>(r#"i123etrailing"#)
-        );
-    }
-
-    #[test]
-    fn test_basic_de_strings() {
-        // Happy paths.
-        assert_eq!("key", from_str::<&str>(r#"3:key"#).unwrap());
-        assert_eq!("asdfg", from_str::<&str>(r#"5:asdfg"#).unwrap());
-        assert_eq!("0087", from_str::<&str>(r#"4:0087"#).unwrap());
-        assert_eq!(
-            "!@#$%^&*()_+{}|:<>?\"/",
-            from_str::<&str>(r#"21:!@#$%^&*()_+{}|:<>?"/"#).unwrap()
-        );
-        assert_eq!("", from_str::<&str>(r#"0:"#).unwrap());
-        assert_eq!("  ", from_str::<&str>(r#"2:  "#).unwrap());
-
-        // Unhappy paths.
-        assert_eq!(Err(Error::EOF), from_str::<&str>(r#"4:EOF"#));
-        assert_eq!(
-            Err(Error::ExpectedStringIntegerLength),
-            from_str::<&str>(r#"string"#)
-        );
-        assert_eq!(
-            Err(Error::ParseStringIntegerLengthError),
-            from_str::<&str>(r#"nointeger:value"#)
-        );
-        assert_eq!(
-            Err(Error::TrailingCharacters),
-            from_str::<&str>(r#"3:keytrailing"#)
-        );
-    }
-
-    #[test]
-    fn test_basic_de_structs() {
-        #[derive(Deserialize, PartialEq, Debug)]
-        struct IntegerTest {
-            integer: i32,
-            integers: Vec<i32>,
-        }
-
-        assert_eq!(
-            IntegerTest {
-                integer: 1995,
-                integers: vec!(1, 2, 3)
-            },
-            from_str::<IntegerTest>(r#"d7:integeri1995e8:integersli1ei2ei3eee"#).unwrap()
-        );
-
-        #[derive(Deserialize, PartialEq, Debug)]
-        struct StringTest<'a> {
-            string: String,
-            strings: Vec<String>,
-            string_slice: &'a str,
-            string_slices: Vec<&'a str>,
-        }
-
-        assert_eq!(
-            StringTest {
-                string: String::from("somestring"),
-                strings: vec!(String::from("a"), String::from("b"), String::from("c")),
-                string_slice: "longstring".repeat(10).as_str(),
-                string_slices: vec!("d", "e", "f", "g")
-            },
-            from_str::<StringTest>(
-                r#"d6:string10:somestring7:stringsl1:a1:b1:ce12:string_slice100:longstringlongstringlongstringlongstringlongstringlongstringlongstringlongstringlongstringlongstring13:string_slicesl1:d1:e1:f1:gee"#
-            )
-            .unwrap()
-        );
-
-        #[derive(Deserialize, PartialEq, Debug)]
-        struct InnerMixedStructTest<'a> {
-            string: &'a str,
-        }
-
-        #[derive(Deserialize, PartialEq, Debug)]
-        struct MixedStructTest<'a> {
-            integer: usize,
-            negative_integer: i32,
-
-            #[serde(borrow)]
-            inner_struct: InnerMixedStructTest<'a>,
-        }
-
-        assert_eq!(
-            MixedStructTest {
-                integer: 3000,
-                negative_integer: -89343451,
-                inner_struct: InnerMixedStructTest { string: "asdf" }
-            },
-            from_str::<MixedStructTest>(
-                r#"d7:integeri3000e16:negative_integeri-89343451e12:inner_structd6:string4:asdfee"#
-            )
-            .unwrap()
-        );
     }
 }

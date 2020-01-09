@@ -1,10 +1,10 @@
-// TODO: Remove allowances after successful implementation.
-#![allow(dead_code)]
-#![allow(unused_variables)]
-#![allow(unused_imports)]
+extern crate num_traits;
+extern crate serde;
 
 #[doc(inline)]
-pub use crate::error::{Error, Result};
+pub use self::de::{from_str, Deserializer};
+#[doc(inline)]
+pub use self::error::{Error, Result};
 
 pub mod de;
 pub mod error;
