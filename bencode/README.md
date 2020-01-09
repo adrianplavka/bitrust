@@ -1,11 +1,10 @@
-
 # Bitrust - Bencode
 
-**Bencode** is a specific format, built for BitTorrent protocol.
+**Bencode** is a specific data format, used in BitTorrent protocol.
 
-This package should provide seamless bencode decoding & encoding, with support of serialization & deserialization of structs.
+This package should provide seamless Bencode serialization & deserialization of various data types, using Serde library.
 
 **Current state:**
-- [ ] decoding **(currently in progress)**
-- [ ] encoding
-- [ ] integrate with **serde** package
+
+- [x] deserialization
+- [ ] serialization **(currently in progress)**
