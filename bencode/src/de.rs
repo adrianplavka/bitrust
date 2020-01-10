@@ -1,22 +1,64 @@
 //! Bencode deserialization using serde library.
 
 use std::ops::Neg;
+use std::str;
 
 use num_traits::{CheckedAdd, CheckedMul};
-use serde::de::{self, DeserializeSeed, MapAccess, SeqAccess, Visitor};
+use serde::de::{self, DeserializeSeed, Visitor};
 use serde::Deserialize;
 
 use crate::error::{Error, Result};
+use crate::read::{self};
+pub use crate::read::{Read, SliceRead, StrRead};
 
-pub struct Deserializer<'de> {
-    /// This string starts with the input data and characters are
-    /// truncated off the beginning, as data is being parsed.
-    input: &'de str,
+/// A structure that deserializes Bencode into Rust values.
+pub struct Deserializer<R> {
+    read: R,
 }
 
-impl<'de> Deserializer<'de> {
-    pub fn from_str(input: &'de str) -> Self {
-        Deserializer { input }
+impl<'de, R> Deserializer<R>
+where
+    R: read::Read<'de>,
+{
+    /// Create a Bencode deserializer from one of the possible serde_json input
+    /// sources.
+    ///
+    /// Typically it is more convenient to use one of these methods instead:
+    ///
+    ///   - Deserializer::from_str
+    ///   - Deserializer::from_bytes
+    ///   - Deserializer::from_reader
+    pub fn new(read: R) -> Self {
+        Deserializer { read }
+    }
+}
+
+impl<'de, 'a> Deserializer<read::SliceRead<'a>> {
+    /// Creates a Bencode deserializer from a `&[u8]`.
+    pub fn from_slice(bytes: &'a [u8]) -> Self {
+        Deserializer::new(read::SliceRead::new(bytes))
+    }
+}
+
+impl<'de, 'a> Deserializer<read::StrRead<'a>> {
+    /// Creates a Bencode deserializer from a `&str`.
+    pub fn from_str(s: &'a str) -> Self {
+        Deserializer::new(read::StrRead::new(s))
+    }
+}
+
+fn from_trait<'de, R, T>(read: R) -> Result<T>
+where
+    R: Read<'de>,
+    T: de::Deserialize<'de>,
+{
+    let mut de = Deserializer::new(read);
+    let value = de::Deserialize::deserialize(&mut de)?;
+
+    if de.read.end() {
+        Ok(value)
+    } else {
+        Err(Error::TrailingCharacters)
     }
 }
 
@@ -24,34 +66,22 @@ pub fn from_str<'a, T>(s: &'a str) -> Result<T>
 where
     T: Deserialize<'a>,
 {
-    let mut deserializer = Deserializer::from_str(s);
-    let t = T::deserialize(&mut deserializer)?;
-
-    if !deserializer.input.is_empty() {
-        Err(Error::TrailingCharacters)
-    } else {
-        Ok(t)
-    }
+    from_trait(read::StrRead::new(s))
 }
 
-impl<'de> Deserializer<'de> {
-    /// Peek at the first character in the input without consuming it.
-    fn peek_byte(&mut self) -> Result<u8> {
-        self.input.bytes().next().ok_or(Error::EOF)
-    }
+pub fn from_slice<'a, T>(v: &'a [u8]) -> Result<T>
+where
+    T: Deserialize<'a>,
+{
+    from_trait(read::SliceRead::new(v))
+}
 
-    /// Peek at the n-th character in the input without consuming it.
-    fn peek_byte_nth(&mut self, n: usize) -> Result<u8> {
-        self.input.bytes().nth(n).ok_or(Error::EOF)
-    }
+//////////////////////////////////////////////////////////////////////////////
 
-    /// Consume the first character in the input.
-    fn next_byte(&mut self) -> Result<u8> {
-        let ch = self.peek_byte()?;
-        self.input = &self.input[1..];
-        Ok(ch)
-    }
-
+impl<'de, R> Deserializer<R>
+where
+    R: read::Read<'de>,
+{
     /// Parse the Bencode unsigned integer value.
     fn parse_unsigned<T>(&mut self) -> Result<T>
     where
@@ -61,7 +91,7 @@ impl<'de> Deserializer<'de> {
         let mut is_first_loop = true;
 
         loop {
-            match self.next_byte()? {
+            match self.read.next_byte()? {
                 // Numbers (besides '0'), get added to the final integer.
                 ch @ b'1'..=b'9' => {
                     integer = match integer.checked_mul(&T::from(10)) {
@@ -79,7 +109,7 @@ impl<'de> Deserializer<'de> {
                 // It will yield an error, if it happens to be on the beginning,
                 // while there are still some numbers left.
                 b'0' => {
-                    let next = self.peek_byte()?;
+                    let next = self.read.peek_byte()?;
                     if next != b'e' && is_first_loop {
                         return Err(Error::ExpectedUnsignedInteger);
                     }
@@ -120,7 +150,7 @@ impl<'de> Deserializer<'de> {
         let mut is_negative = false;
 
         loop {
-            match self.next_byte()? {
+            match self.read.next_byte()? {
                 // Numbers (besides '0') get added to the final integer.
                 ch @ b'1'..=b'9' => {
                     integer = match integer.checked_mul(&T::from(10)) {
@@ -138,7 +168,7 @@ impl<'de> Deserializer<'de> {
                 // It will yield an error, if it happens to be on the beginning,
                 // while there are still some numbers left.
                 b'0' => {
-                    let next = self.peek_byte()?;
+                    let next = self.read.peek_byte()?;
                     if next != b'e' && is_first_loop {
                         return Err(Error::ExpectedInteger);
                     }
@@ -154,7 +184,7 @@ impl<'de> Deserializer<'de> {
                     // numbers.
                     // Also, if the symbol happens to appear anywhere except at the
                     // beginning, it will yield an error.
-                    let next = self.peek_byte()?;
+                    let next = self.read.peek_byte()?;
                     if next == b'0' || next == b'e' || !is_first_loop {
                         return Err(Error::ExpectedInteger);
                     }
@@ -182,29 +212,77 @@ impl<'de> Deserializer<'de> {
         Ok(if is_negative { -integer } else { integer })
     }
 
-    /// Parse the Bencode string value.
-    fn parse_string(&mut self) -> Result<&'de str> {
-        match self.input.find(':') {
-            Some(idx) => {
-                // Retrieve the length of the string as number from the
-                // beginning of a string.
-                let length = match self.input[..idx].parse::<usize>() {
-                    Ok(l) => l,
-                    _ => return Err(Error::ParseStringIntegerLengthError),
-                };
+    fn parse_string_length<T>(&mut self) -> Result<T>
+    where
+        T: CheckedAdd + CheckedMul + From<u8>,
+    {
+        let mut integer = T::from(0);
+        let mut is_first_loop = true;
 
-                // If length of the string is bigger than the input itself,
-                // it could result into an array out of bounds error.
-                // Yields an unexpected end error.
-                if length > self.input[idx + 1..].len() {
-                    return Err(Error::EOF);
+        loop {
+            match self.read.next_byte()? {
+                // Numbers (besides '0'), get added to the final integer.
+                ch @ b'1'..=b'9' => {
+                    integer = match integer.checked_mul(&T::from(10)) {
+                        Some(i) => i,
+                        _ => return Err(Error::IntegerOverflow),
+                    };
+
+                    integer = match integer.checked_add(&T::from(ch - b'0')) {
+                        Some(i) => i,
+                        _ => return Err(Error::IntegerOverflow),
+                    };
                 }
+                // Number '0' is treated differently, as it cannot occur multiple
+                // times at the beginning.
+                // It will yield an error, if it happens to be on the beginning,
+                // while there are still some numbers left.
+                b'0' => {
+                    let next = self.read.peek_byte()?;
+                    if next != b':' && is_first_loop {
+                        return Err(Error::ExpectedStringIntegerLength);
+                    }
 
-                let string = &self.input[idx + 1..=length + 1 + (self.input[..idx].len() - 1)];
-                self.input = &self.input[idx + 1 + length..];
-                Ok(string)
+                    integer = match integer.checked_mul(&T::from(10)) {
+                        Some(i) => i,
+                        _ => return Err(Error::IntegerOverflow),
+                    };
+                }
+                // Break the loop, if it's the end of string length.
+                b':' => {
+                    // If an end has been occured while the length is empty,
+                    // yield an error (it's not a number).
+                    if is_first_loop {
+                        return Err(Error::ExpectedStringIntegerLength);
+                    }
+                    break;
+                }
+                // If an non-expecting byte has been found.
+                _ => {
+                    return Err(Error::ExpectedStringIntegerLength);
+                }
             }
-            None => Err(Error::ExpectedStringIntegerLength),
+
+            is_first_loop = false;
+        }
+
+        Ok(integer)
+    }
+
+    /// Parse the Bencode string value as UTF-8.
+    fn parse_string(&mut self) -> Result<&'de str> {
+        let length = self.parse_string_length::<usize>()?;
+
+        if length != 0 {
+            // Assume, that the deserialized value is a valid UTF-8 string.
+            // TODO: If not, return an appropriate error.
+            let string = match str::from_utf8(self.read.next_bytes(length - 1)?) {
+                Ok(s) => s,
+                _ => return Err(Error::InvalidUnicodeCodePoint),
+            };
+            Ok(string)
+        } else {
+            Ok("")
         }
     }
 }
@@ -215,14 +293,16 @@ macro_rules! fn_deserialize_unsigned {
         where
             V: Visitor<'de>
         {
-            match self.next_byte()? {
+            match self.read.next_byte()? {
                 b'i' => {
-                    if self.peek_byte()? == b'-' {
+                    if self.read.peek_byte()? == b'-' {
                         return Err(Error::ExpectedUnsignedInteger);
                     }
                     visitor.$visit(self.parse_unsigned::<$type>()?)
                 }
-                _ => Err(Error::ExpectedUnsignedInteger),
+                _ => {
+                    Err(Error::ExpectedUnsignedInteger)
+                },
             }
         }
     };
@@ -234,7 +314,7 @@ macro_rules! fn_deserialize_signed {
         where
             V: Visitor<'de>,
         {
-            match self.next_byte()? {
+            match self.read.next_byte()? {
                 b'i' => visitor.$visit(self.parse_signed::<$type>()?),
                 _ => Err(Error::ExpectedInteger),
             }
@@ -242,7 +322,7 @@ macro_rules! fn_deserialize_signed {
     };
 }
 
-impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
+impl<'de, 'a, R: Read<'de>> de::Deserializer<'de> for &'a mut Deserializer<R> {
     type Error = Error;
 
     /// Look at the input data to decide, what Serde data model type to deserialize as.
@@ -262,10 +342,10 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        match self.peek_byte()? {
+        match self.read.peek_byte()? {
             b'0'..=b'9' => self.deserialize_str(visitor),
             b'i' => {
-                if self.peek_byte_nth(1)? != b'-' {
+                if self.read.peek_byte_nth(1)? != b'-' {
                     self.deserialize_u64(visitor)
                 } else {
                     self.deserialize_i64(visitor)
@@ -321,7 +401,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        match self.peek_byte()? {
+        match self.read.peek_byte()? {
             b'0'..=b'9' => visitor.visit_borrowed_str(self.parse_string()?),
             _ => Err(Error::ExpectedStringIntegerLength),
         }
@@ -343,14 +423,30 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
         self.deserialize_str(visitor)
     }
 
+    /// Deserializes string as `f32`, since Bencode's integer doesn't allow floats.
+    fn deserialize_f32<V>(self, visitor: V) -> Result<V::Value>
+    where
+        V: Visitor<'de>,
+    {
+        self.deserialize_str(visitor)
+    }
+
+    /// Deserializes string as `f64`, since Bencode's integer doesn't allow floats.
+    fn deserialize_f64<V>(self, visitor: V) -> Result<V::Value>
+    where
+        V: Visitor<'de>,
+    {
+        self.deserialize_str(visitor)
+    }
+
     fn deserialize_seq<V>(mut self, visitor: V) -> Result<V::Value>
     where
         V: Visitor<'de>,
     {
-        match self.next_byte()? {
+        match self.read.next_byte()? {
             b'l' => {
                 let value = visitor.visit_seq(ListDeserializer::new(&mut self))?;
-                if self.next_byte()? != b'e' {
+                if self.read.next_byte()? != b'e' {
                     return Err(Error::ExpectedListEnd);
                 }
 
@@ -385,10 +481,10 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        match self.next_byte()? {
+        match self.read.next_byte()? {
             b'd' => {
                 let value = visitor.visit_map(DictionaryDeserializer::new(&mut self))?;
-                if self.next_byte()? != b'e' {
+                if self.read.next_byte()? != b'e' {
                     return Err(Error::ExpectedDictionaryEnd);
                 }
 
@@ -412,30 +508,30 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
     }
 
     serde::forward_to_deserialize_any! {
-        bool f32 f64 char
+        bool char
         bytes byte_buf unit unit_struct option
         enum newtype_struct
     }
 }
 
-struct ListDeserializer<'a, 'de: 'a> {
-    de: &'a mut Deserializer<'de>,
+struct ListDeserializer<'a, R: 'a> {
+    de: &'a mut Deserializer<R>,
 }
 
-impl<'a, 'de> ListDeserializer<'a, 'de> {
-    fn new(de: &'a mut Deserializer<'de>) -> Self {
+impl<'a, R: 'a> ListDeserializer<'a, R> {
+    fn new(de: &'a mut Deserializer<R>) -> Self {
         ListDeserializer { de }
     }
 }
 
-impl<'de, 'a> SeqAccess<'de> for ListDeserializer<'a, 'de> {
+impl<'de, 'a, R: Read<'de> + 'a> de::SeqAccess<'de> for ListDeserializer<'a, R> {
     type Error = Error;
 
     fn next_element_seed<T>(&mut self, seed: T) -> Result<Option<T::Value>>
     where
         T: DeserializeSeed<'de>,
     {
-        if self.de.peek_byte()? == b'e' {
+        if self.de.read.peek_byte()? == b'e' {
             return Ok(None);
         }
 
@@ -444,24 +540,24 @@ impl<'de, 'a> SeqAccess<'de> for ListDeserializer<'a, 'de> {
     }
 }
 
-struct DictionaryDeserializer<'a, 'de: 'a> {
-    de: &'a mut Deserializer<'de>,
+struct DictionaryDeserializer<'a, R: 'a> {
+    de: &'a mut Deserializer<R>,
 }
 
-impl<'a, 'de> DictionaryDeserializer<'a, 'de> {
-    fn new(de: &'a mut Deserializer<'de>) -> Self {
+impl<'a, R: 'a> DictionaryDeserializer<'a, R> {
+    fn new(de: &'a mut Deserializer<R>) -> Self {
         DictionaryDeserializer { de }
     }
 }
 
-impl<'de, 'a> MapAccess<'de> for DictionaryDeserializer<'a, 'de> {
+impl<'de, 'a, R: Read<'de> + 'a> de::MapAccess<'de> for DictionaryDeserializer<'a, R> {
     type Error = Error;
 
     fn next_key_seed<K>(&mut self, seed: K) -> Result<Option<K::Value>>
     where
         K: DeserializeSeed<'de>,
     {
-        match self.de.peek_byte()? {
+        match self.de.read.peek_byte()? {
             b'e' => return Ok(None),
             b'0'..=b'9' => {}
             _ => return Err(Error::ExpectedDictionaryKeyString),

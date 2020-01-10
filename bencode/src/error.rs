@@ -31,9 +31,9 @@ pub enum Error {
     /// specified, or is of an unappropriate type during deserialization.
     ExpectedStringIntegerLength,
 
-    /// ParseStringIntegerLengthError occurs, when parsing length of string has
-    /// failed during deserialization.
-    ParseStringIntegerLengthError,
+    /// InvalidUnicodeCodePoint occurs, when parsing of a string has failed during
+    /// deserialization (it is not in UTF-8).
+    InvalidUnicodeCodePoint,
 
     /// ExpectedList occurs, when a list was expected at the position during
     /// deserialization.
@@ -81,7 +81,7 @@ impl From<Error> for io::Error {
             | Error::ExpectedUnsignedInteger
             | Error::IntegerOverflow
             | Error::ExpectedStringIntegerLength
-            | Error::ParseStringIntegerLengthError
+            | Error::InvalidUnicodeCodePoint
             | Error::ExpectedList
             | Error::ExpectedListEnd
             | Error::ExpectedDictionary
@@ -106,8 +106,8 @@ impl Display for Error {
             Error::ExpectedStringIntegerLength => {
                 f.write_str("[bitrust_bencode error]: expected string's integer length")
             }
-            Error::ParseStringIntegerLengthError => {
-                f.write_str("[bitrust_bencode error]: unable to parse string's integer length")
+            Error::InvalidUnicodeCodePoint => {
+                f.write_str("[bitrust_bencode error]: invalid unicode code point")
             }
             Error::ExpectedList => f.write_str("[bitrust_bencode error]: expected list"),
             Error::ExpectedListEnd => f.write_str("[bitrust_bencode error]: expected list's end"),

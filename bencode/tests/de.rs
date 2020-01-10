@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod de_tests {
     extern crate bitrust_bencode;
-    use bitrust_bencode::{from_str, Error};
+    use bitrust_bencode::{from_slice, from_str, Error};
     use serde::Deserialize;
 
     #[test]
@@ -185,6 +185,11 @@ mod de_tests {
         assert_eq!(
             Err(Error::TrailingCharacters),
             from_str::<&str>(r#"3:keytrailing"#)
+        );
+        assert_eq!(
+            Err(Error::InvalidUnicodeCodePoint),
+            // 6:He?llo
+            from_slice::<&str>(&[0x36, 0x3a, 0x48, 0x65, 0xf0, 0x6c, 0x6c, 0x6f])
         );
     }
 

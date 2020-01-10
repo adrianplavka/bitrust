@@ -31,10 +31,18 @@ impl Serializer {
         T: ToString,
     {
         self.output += "i";
-        self.output += integer.to_string().as_str();
+        self.output += &integer.to_string();
         self.output += "e";
         Ok(())
     }
+}
+
+macro_rules! fn_serialize_integer {
+    ($method:ident, $type:ty) => {
+        fn $method(self, v: $type) -> Result<()> {
+            self.serialize_integer(v)
+        }
+    };
 }
 
 impl<'a> ser::Serializer for &'a mut Serializer {
@@ -49,47 +57,25 @@ impl<'a> ser::Serializer for &'a mut Serializer {
     type SerializeStruct = Self;
     type SerializeStructVariant = Self;
 
+    fn_serialize_integer!(serialize_u8, u8);
+    fn_serialize_integer!(serialize_u16, u16);
+    fn_serialize_integer!(serialize_u32, u32);
+    fn_serialize_integer!(serialize_u64, u64);
+    serde::serde_if_integer128! {
+        fn_serialize_integer!(serialize_u128, u128);
+    }
+
+    fn_serialize_integer!(serialize_i8, i8);
+    fn_serialize_integer!(serialize_i16, i16);
+    fn_serialize_integer!(serialize_i32, i32);
+    fn_serialize_integer!(serialize_i64, i64);
+    serde::serde_if_integer128! {
+        fn_serialize_integer!(serialize_i128, i128);
+    }
+
     fn serialize_bool(self, v: bool) -> Result<()> {
         self.output += if v { "4:true" } else { "5:false" };
         Ok(())
-    }
-
-    fn serialize_u8(self, v: u8) -> Result<()> {
-        self.serialize_integer(v)
-    }
-    fn serialize_u16(self, v: u16) -> Result<()> {
-        self.serialize_integer(v)
-    }
-
-    fn serialize_u32(self, v: u32) -> Result<()> {
-        self.serialize_integer(v)
-    }
-    fn serialize_u64(self, v: u64) -> Result<()> {
-        self.serialize_integer(v)
-    }
-
-    fn serialize_i8(self, v: i8) -> Result<()> {
-        self.serialize_integer(v)
-    }
-
-    fn serialize_i16(self, v: i16) -> Result<()> {
-        self.serialize_integer(v)
-    }
-
-    fn serialize_i32(self, v: i32) -> Result<()> {
-        self.serialize_integer(v)
-    }
-
-    fn serialize_i64(self, v: i64) -> Result<()> {
-        self.serialize_integer(v)
-    }
-
-    fn serialize_f32(self, v: f32) -> Result<()> {
-        self.serialize_integer(v)
-    }
-
-    fn serialize_f64(self, v: f64) -> Result<()> {
-        self.serialize_integer(v)
     }
 
     fn serialize_str(self, v: &str) -> Result<()> {
@@ -103,7 +89,17 @@ impl<'a> ser::Serializer for &'a mut Serializer {
         self.serialize_str(&v.to_string())
     }
 
-    fn serialize_bytes(self, v: &[u8]) -> Result<()> {
+    /// Serializes `f32` as a string, since Bencode's integer doesn't allow floats.
+    fn serialize_f32(self, v: f32) -> Result<()> {
+        self.serialize_str(&v.to_string())
+    }
+
+    /// Serializes `f64` as a string, since Bencode's integer doesn't allow floats.
+    fn serialize_f64(self, v: f64) -> Result<()> {
+        self.serialize_str(&v.to_string())
+    }
+
+    fn serialize_bytes(self, _v: &[u8]) -> Result<()> {
         unimplemented!()
     }
 
