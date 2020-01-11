@@ -32,13 +32,11 @@ pub trait Read<'de>: private::Sealed {
 pub struct SliceRead<'a> {
     pub slice: &'a [u8],
 
-    /// Index of the next byte that will be returned by next() or peek().
+    /// Index of the current byte, used by `peek_*` & `next_*` methods.
     index: usize,
 }
 
-/// Bencode input source that reads from a UTF-8 string.
-//
-// Able to elide UTF-8 checks by assuming that the input is valid UTF-8.
+/// Bencode input source that reads from an UTF-8 string.
 pub struct StrRead<'a> {
     delegate: SliceRead<'a>,
 }
@@ -51,7 +49,7 @@ mod private {
 //////////////////////////////////////////////////////////////////////////////
 
 impl<'a> SliceRead<'a> {
-    /// Create a Bencode input source to read from a slice of bytes.
+    /// Creates a Bencode input source to read from a slice of bytes.
     pub fn new(slice: &'a [u8]) -> Self {
         SliceRead {
             slice: slice,
@@ -64,8 +62,6 @@ impl<'a> private::Sealed for SliceRead<'a> {}
 
 impl<'a> Read<'a> for SliceRead<'a> {
     fn peek_byte(&self) -> Result<u8> {
-        // `Ok(self.slice.get(self.index).map(|ch| *ch))` is about 10% slower
-        // for some reason.
         if self.index < self.slice.len() {
             Ok(self.slice[self.index])
         } else {
@@ -105,7 +101,7 @@ impl<'a> Read<'a> for SliceRead<'a> {
 //////////////////////////////////////////////////////////////////////////////
 
 impl<'a> StrRead<'a> {
-    /// Create a Bencode input source to read from a UTF-8 string.
+    /// Creates a Bencode input source to read from an UTF-8 string.
     pub fn new(s: &'a str) -> Self {
         StrRead {
             delegate: SliceRead::new(s.as_bytes()),

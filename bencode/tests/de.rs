@@ -188,7 +188,8 @@ mod de_tests {
         );
         assert_eq!(
             Err(Error::InvalidUnicodeCodePoint),
-            // 6:He?llo
+            // Check for an invalid conversion from byte slice to an UTF-8 `&str`.
+            // This sequence would translate to: `6:He?llo`
             from_slice::<&str>(&[0x36, 0x3a, 0x48, 0x65, 0xf0, 0x6c, 0x6c, 0x6f])
         );
     }
@@ -254,6 +255,47 @@ mod de_tests {
                 r#"d7:integeri3000e16:negative_integeri-89343451e12:inner_structd6:string4:asdfee"#
             )
             .unwrap()
+        );
+    }
+
+    #[test]
+    fn de_structs_file() {
+        use std::env;
+        use std::fs;
+        use std::path::Path;
+
+        #[derive(Deserialize, PartialEq, Debug)]
+        struct TorrentInfo<'a> {
+            length: usize,
+
+            name: &'a str,
+
+            #[serde(rename(deserialize = "piece length"))]
+            piece_length: usize,
+
+            pieces: &'a [u8],
+        }
+
+        #[derive(Deserialize, PartialEq, Debug)]
+        struct TorrentMetainfo<'a> {
+            #[serde(borrow)]
+            announce: &'a str,
+
+            info: TorrentInfo<'a>,
+        }
+
+        let mut dir = env::current_dir().unwrap();
+        dir.push(Path::new(
+            "tests/data/ubuntu-19.10-desktop-amd64.iso.torrent",
+        ));
+        let f = &fs::read(dir).unwrap();
+
+        // Expecting a valid deserialization, therefore shouldn't throw any errors.
+        let metainfo = from_slice::<TorrentMetainfo>(f).unwrap();
+
+        assert_eq!(
+            (metainfo.info.length / metainfo.info.piece_length),
+            metainfo.info.pieces.len()
         );
     }
 }

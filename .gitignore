@@ -2,4 +2,3 @@
 target/
 **/*.rs.bk
 .vscode
-data
