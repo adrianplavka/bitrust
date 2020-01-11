@@ -291,11 +291,6 @@ mod de_tests {
         let f = &fs::read(dir).unwrap();
 
         // Expecting a valid deserialization, therefore shouldn't throw any errors.
-        let metainfo = from_slice::<TorrentMetainfo>(f).unwrap();
-
-        assert_eq!(
-            (metainfo.info.length / metainfo.info.piece_length),
-            metainfo.info.pieces.len()
-        );
+        from_slice::<TorrentMetainfo>(f).unwrap();
     }
 }
