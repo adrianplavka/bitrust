@@ -30,10 +30,9 @@ pub trait Read<'de>: private::Sealed {
 
 /// Bencode input source that reads from a slice of bytes.
 pub struct SliceRead<'a> {
+    /// This slice starts full and values are trimmed as it's
+    /// being read from.
     pub slice: &'a [u8],
-
-    /// Index of the current byte, used by `peek_*` & `next_*` methods.
-    index: usize,
 }
 
 /// Bencode input source that reads from an UTF-8 string.
@@ -51,10 +50,7 @@ mod private {
 impl<'a> SliceRead<'a> {
     /// Creates a Bencode input source to read from a slice of bytes.
     pub fn new(slice: &'a [u8]) -> Self {
-        SliceRead {
-            slice: slice,
-            index: 0,
-        }
+        SliceRead { slice: slice }
     }
 }
 
@@ -62,16 +58,16 @@ impl<'a> private::Sealed for SliceRead<'a> {}
 
 impl<'a> Read<'a> for SliceRead<'a> {
     fn peek_byte(&self) -> Result<u8> {
-        if self.index < self.slice.len() {
-            Ok(self.slice[self.index])
+        if self.slice.len() > 0 {
+            Ok(self.slice[0])
         } else {
             Err(Error::EOF)
         }
     }
 
     fn peek_byte_nth(&self, n: usize) -> Result<u8> {
-        if self.index + n < self.slice.len() {
-            Ok(self.slice[self.index + n])
+        if n < self.slice.len() {
+            Ok(self.slice[n])
         } else {
             Err(Error::EOF)
         }
@@ -79,14 +75,14 @@ impl<'a> Read<'a> for SliceRead<'a> {
 
     fn next_byte(&mut self) -> Result<u8> {
         let byte = self.peek_byte()?;
-        self.index += 1;
+        self.slice = &self.slice[1..];
         Ok(byte)
     }
 
     fn next_bytes(&mut self, end: usize) -> Result<&'a [u8]> {
-        if self.index + end < self.slice.len() {
-            let bytes = &self.slice[self.index..=self.index + end];
-            self.index += end + 1;
+        if end < self.slice.len() {
+            let bytes = &self.slice[0..=end];
+            self.slice = &self.slice[end + 1..];
             Ok(bytes)
         } else {
             Err(Error::EOF)
@@ -94,7 +90,7 @@ impl<'a> Read<'a> for SliceRead<'a> {
     }
 
     fn end(&self) -> bool {
-        self.index == self.slice.len()
+        self.slice.len() == 0
     }
 }
 
