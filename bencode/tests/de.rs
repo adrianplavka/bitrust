@@ -186,10 +186,45 @@ mod de_tests {
             Err(Error::TrailingCharacters),
             from_str::<&str>(r#"3:keytrailing"#)
         );
+    }
+
+    #[test]
+    fn de_floats() {
+        // Happy paths.
+        assert_eq!(4.32, from_str::<f32>(r#"4:4.32"#).unwrap());
+        assert_eq!(134.64, from_str::<f64>(r#"6:134.64"#).unwrap());
+        assert_eq!(-134.64, from_str::<f64>(r#"7:-134.64"#).unwrap());
+        assert_eq!(-0.0, from_str::<f64>(r#"4:-0.0"#).unwrap());
+        assert_eq!(-5032.0, from_str::<f64>(r#"5:-5032"#).unwrap());
+        assert_eq!(0.0, from_str::<f64>(r#"0:"#).unwrap());
+
+        // Unhappy paths.
+        assert_eq!(Err(Error::ExpectedFloat), from_str::<f64>(r#"7:invalid"#));
+        assert_eq!(Err(Error::ExpectedFloat), from_str::<f64>(r#"3:-0a"#));
+    }
+
+    #[test]
+    fn de_bytes() {
+        // Happy paths.
+
+        // Check for a valid conversion from byte slice.
+        // This sequence would translate to: `6:He?llo`.
+        //
+        // Since this conversion is raw & doesn't translate to UTF-8, it should
+        // unwrap without an error (even though there is an invalid code point).
+        assert_eq!(
+            &[0x48, 0x65, 0xf0, 0x6c, 0x6c, 0x6f],
+            from_slice::<&[u8]>(&[0x36, 0x3a, 0x48, 0x65, 0xf0, 0x6c, 0x6c, 0x6f]).unwrap()
+        );
+
+        // Unhappy paths.
+
+        // Check for an invalid conversion from byte slice to an UTF-8 `&str`.
+        // This sequence would translate to: `6:He?llo`.
+        //
+        // This sequence has an invalid code point 0xf0, therefore it should fail.
         assert_eq!(
             Err(Error::InvalidUnicodeCodePoint),
-            // Check for an invalid conversion from byte slice to an UTF-8 `&str`.
-            // This sequence would translate to: `6:He?llo`
             from_slice::<&str>(&[0x36, 0x3a, 0x48, 0x65, 0xf0, 0x6c, 0x6c, 0x6f])
         );
     }

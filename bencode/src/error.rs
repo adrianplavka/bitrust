@@ -35,6 +35,10 @@ pub enum Error {
     /// deserialization (it is not in UTF-8).
     InvalidUnicodeCodePoint,
 
+    /// ExpectedFloat occurs, when parsing string to float has failed during
+    /// deserialization.
+    ExpectedFloat,
+
     /// ExpectedList occurs, when a list was expected at the position during
     /// deserialization.
     ExpectedList,
@@ -82,6 +86,7 @@ impl From<Error> for io::Error {
             | Error::IntegerOverflow
             | Error::ExpectedStringIntegerLength
             | Error::InvalidUnicodeCodePoint
+            | Error::ExpectedFloat
             | Error::ExpectedList
             | Error::ExpectedListEnd
             | Error::ExpectedDictionary
@@ -109,6 +114,7 @@ impl Display for Error {
             Error::InvalidUnicodeCodePoint => {
                 f.write_str("[bitrust_bencode error]: invalid unicode code point")
             }
+            Error::ExpectedFloat => f.write_str("[bitrust_bencode error]: expected float"),
             Error::ExpectedList => f.write_str("[bitrust_bencode error]: expected list"),
             Error::ExpectedListEnd => f.write_str("[bitrust_bencode error]: expected list's end"),
             Error::ExpectedDictionary => {

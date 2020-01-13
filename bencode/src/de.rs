@@ -1,9 +1,9 @@
 //! Bencode deserialization using Serde library.
 
 use std::ops::Neg;
-use std::str;
+use std::str::{self, FromStr};
 
-use num_traits::{CheckedAdd, CheckedMul};
+use num_traits::{CheckedAdd, CheckedMul, Float};
 use serde::de::{self, DeserializeSeed, Visitor};
 use serde::Deserialize;
 
@@ -280,7 +280,9 @@ where
     fn parse_string(&mut self) -> Result<&'de str> {
         let length = self.parse_string_length::<usize>()?;
 
-        if length != 0 {
+        // This will always be a positive length, but check, if the length is greater
+        // than zero.
+        if length > 0 {
             // Assumption, that the deserialized value is a valid UTF-8 string.
             let string = match str::from_utf8(self.read.next_bytes(length - 1)?) {
                 Ok(s) => s,
@@ -296,11 +298,40 @@ where
     fn parse_bytes(&mut self) -> Result<&'de [u8]> {
         let length = self.parse_string_length::<usize>()?;
 
-        if length != 0 {
-            let string = self.read.next_bytes(length - 1)?;
-            Ok(string)
+        // This will always be a positive length, but check, if the length is greater
+        // than zero.
+        if length > 0 {
+            let bytes = self.read.next_bytes(length - 1)?;
+            Ok(bytes)
         } else {
             Ok(&[])
+        }
+    }
+
+    /// Parse a Bencode's byte string value as a float.
+    fn parse_float<T>(&mut self) -> Result<T>
+    where
+        T: Float + FromStr,
+    {
+        let length = self.parse_string_length::<usize>()?;
+
+        // This will always be a positive length, but check, if the length is greater
+        // than zero.
+        if length != 0 {
+            // Assumption, that the deserialized value is a valid UTF-8 string.
+            let string_float = match str::from_utf8(self.read.next_bytes(length - 1)?) {
+                Ok(s) => s,
+                _ => return Err(Error::InvalidUnicodeCodePoint),
+            };
+
+            let float = match string_float.parse::<T>() {
+                Ok(f) => f,
+                _ => return Err(Error::ExpectedFloat),
+            };
+
+            Ok(float)
+        } else {
+            Ok(T::from(0.0).unwrap())
         }
     }
 }
@@ -446,7 +477,10 @@ impl<'de, 'a, R: Read<'de>> de::Deserializer<'de> for &'a mut Deserializer<R> {
     where
         V: Visitor<'de>,
     {
-        self.deserialize_str(visitor)
+        match self.read.peek_byte()? {
+            b'0'..=b'9' => visitor.visit_f32(self.parse_float::<f32>()?),
+            _ => Err(Error::ExpectedStringIntegerLength),
+        }
     }
 
     /// Deserializes string as `f64`, since Bencode's integer doesn't allow floats.
@@ -454,10 +488,23 @@ impl<'de, 'a, R: Read<'de>> de::Deserializer<'de> for &'a mut Deserializer<R> {
     where
         V: Visitor<'de>,
     {
-        self.deserialize_str(visitor)
+        match self.read.peek_byte()? {
+            b'0'..=b'9' => visitor.visit_f64(self.parse_float::<f64>()?),
+            _ => Err(Error::ExpectedStringIntegerLength),
+        }
     }
 
     fn deserialize_bytes<V>(self, visitor: V) -> Result<V::Value>
+    where
+        V: Visitor<'de>,
+    {
+        match self.read.peek_byte()? {
+            b'0'..=b'9' => visitor.visit_borrowed_bytes(self.parse_bytes()?),
+            _ => Err(Error::ExpectedStringIntegerLength),
+        }
+    }
+
+    fn deserialize_byte_buf<V>(self, visitor: V) -> Result<V::Value>
     where
         V: Visitor<'de>,
     {
@@ -537,7 +584,7 @@ impl<'de, 'a, R: Read<'de>> de::Deserializer<'de> for &'a mut Deserializer<R> {
 
     serde::forward_to_deserialize_any! {
         bool char
-        byte_buf unit unit_struct option
+        unit unit_struct option
         enum newtype_struct
     }
 }
