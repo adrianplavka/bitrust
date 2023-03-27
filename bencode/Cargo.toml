@@ -1,20 +1,17 @@
-
 [package]
 name = "bitrust_bencode"
-version = "0.1.1"
-description = "Bencode serialization format"
+version = "0.1.0"
+edition = "2021"
+description = "Bencode serialization & deserialization library for Bitrust"
 authors = ["Adrian Plavka <adrian.plavka@gmail.com>"]
 license = "MIT"
-repository = "https://github.com/adrianplavka/bitrust/tree/master/bencode"
-keywords = ["bencode", "serde", "serialization", "deserialization"]
-categories = ["encoding"]
-readme = "README.md"
-include = ["Cargo.toml", "src/**/*.rs", "README.md", "LICENSE.md"]
-edition = "2018"
 
 [dependencies]
-serde = { version = "1.0", features = ["derive"] }
-num-traits = "0.2"
+lexical = { version = "6", features = ["parse-integers", "parse-floats"] }
+nom = "7"
+num-traits = "0"
+serde = "1"
+thiserror = "1"
 
 [dev-dependencies]
-serde_derive = "1.0"
+serde_derive = "1"

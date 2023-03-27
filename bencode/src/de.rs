@@ -1,358 +1,208 @@
-//! Bencode deserialization using Serde library.
+//! Bencode deserialization.
 
-use std::ops::Neg;
 use std::str::{self, FromStr};
 
-use num_traits::{CheckedAdd, CheckedMul, Float};
-use serde::de::{self, DeserializeSeed, Visitor};
-use serde::Deserialize;
+use crate::{
+    error::{Error, Result},
+    token,
+};
 
-use crate::error::{Error, Result};
-use crate::read::{self};
-pub use crate::read::{Read, SliceRead, StrRead};
+use lexical::FromLexical;
+use nom::bytes::complete::{is_a, tag, take};
+use num_traits::{Float, Signed, Unsigned};
+use serde::de;
 
 /// A structure that deserializes Bencode into Rust values.
-pub struct Deserializer<R> {
-    read: R,
+pub struct Deserializer<'a> {
+    data: &'a [u8],
 }
 
-impl<'de, R> Deserializer<R>
+impl<'a> Deserializer<'a> {
+    pub fn new(data: &'a [u8]) -> Self {
+        Self { data }
+    }
+}
+
+/// Deserializes a byte slice containing Bencode format.
+///
+/// The type of the data to be deserialized into is specified using
+/// a generic type `T`.
+///
+/// This function will also check, if any trailing characters are
+/// present at the end of the deserialization, triggering an error.
+pub fn from_slice<'a, T>(data: &'a [u8]) -> Result<T>
 where
-    R: read::Read<'de>,
+    T: de::Deserialize<'a>,
 {
-    /// Create a Bencode deserializer from one of the possible bitrust_bencode
-    /// input sources.
-    ///
-    /// Typically it is more convenient to use one of these methods instead:
-    ///     - Deserializer::from_str
-    ///     - Deserializer::from_slice
-    ///
-    /// Or using exported functions:
-    ///     - bitrust_bencode::from_str
-    ///     - bitrust_benocde::from_slice
-    pub fn new(read: R) -> Self {
-        Deserializer { read }
-    }
-}
-
-impl<'de, 'a> Deserializer<read::SliceRead<'a>> {
-    /// Creates a Bencode deserializer from a `&[u8]`.
-    pub fn from_slice(bytes: &'a [u8]) -> Self {
-        Deserializer::new(read::SliceRead::new(bytes))
-    }
-}
-
-impl<'de, 'a> Deserializer<read::StrRead<'a>> {
-    /// Creates a Bencode deserializer from a `&str`.
-    pub fn from_str(s: &'a str) -> Self {
-        Deserializer::new(read::StrRead::new(s))
-    }
-}
-
-fn from_trait<'de, R, T>(read: R) -> Result<T>
-where
-    R: Read<'de>,
-    T: de::Deserialize<'de>,
-{
-    let mut de = Deserializer::new(read);
+    let mut de = Deserializer::new(data);
     let value = de::Deserialize::deserialize(&mut de)?;
 
-    if de.read.end() {
+    if de.data.len() == 0 {
         Ok(value)
     } else {
         Err(Error::TrailingCharacters)
     }
 }
 
-pub fn from_str<'a, T>(s: &'a str) -> Result<T>
+/// Deserializes a string slice containing Bencode format.
+///
+/// The type of the data to be deserialized into is specified using
+/// a generic type `T`.
+///
+/// This function will also check, if any trailing characters are
+/// present at the end of the deserialization, triggering an error.
+pub fn from_str<'a, T>(data: &'a str) -> Result<T>
 where
-    T: Deserialize<'a>,
+    T: de::Deserialize<'a>,
 {
-    from_trait(read::StrRead::new(s))
+    let mut de = Deserializer::new(data.as_bytes());
+    let value = de::Deserialize::deserialize(&mut de)?;
+
+    if de.data.len() == 0 {
+        Ok(value)
+    } else {
+        Err(Error::TrailingCharacters)
+    }
 }
 
-pub fn from_slice<'a, T>(v: &'a [u8]) -> Result<T>
-where
-    T: Deserialize<'a>,
-{
-    from_trait(read::SliceRead::new(v))
+//////////////////////////////////////////////////////
+
+#[inline]
+fn consume_integer_start(x: &[u8]) -> Result<&[u8]> {
+    tag::<&[u8], &[u8], ()>(&[token::INTEGER_START])(x)
+        .map(|(rest, _)| rest)
+        .map_err(|_| Error::ExpectedInteger)
 }
 
-//////////////////////////////////////////////////////////////////////////////
-
-impl<'de, R> Deserializer<R>
+#[inline]
+fn consume_signed_number<T>(x: &[u8]) -> Result<(&[u8], T)>
 where
-    R: read::Read<'de>,
+    T: Signed + FromLexical,
 {
-    /// Parse a Bencode's signed integer value.
+    let (rest, value) = is_a::<&[u8], &[u8], ()>(token::SIGNED_NUMBER_CHARSET)(x)
+        .map_err(|_| Error::ExpectedSignedNumber)?;
+
+    let integer = lexical::parse::<T, _>(value).map_err(|e| {
+        if e.is_overflow() {
+            Error::IntegerOverflow
+        } else {
+            Error::ExpectedSignedNumber
+        }
+    })?;
+
+    Ok((rest, integer))
+}
+
+#[inline]
+fn consume_unsigned_number<T>(x: &[u8]) -> Result<(&[u8], T)>
+where
+    T: Unsigned + FromLexical,
+{
+    let (rest, value) = is_a::<&[u8], &[u8], ()>(token::UNSIGNED_NUMBER_CHARSET)(x)
+        .map_err(|_| Error::ExpectedUnsignedNumber)?;
+
+    let integer = lexical::parse::<T, _>(value).map_err(|e| {
+        if e.is_overflow() {
+            Error::IntegerOverflow
+        } else {
+            Error::ExpectedUnsignedNumber
+        }
+    })?;
+
+    Ok((rest, integer))
+}
+
+#[inline]
+fn consume_bytes_delimiter(x: &[u8]) -> Result<&[u8]> {
+    tag::<&[u8], &[u8], ()>(&[token::BYTES_DELIMITER])(x)
+        .map(|(rest, _)| rest)
+        .map_err(|_| Error::ExpectedStringIntegerLength)
+}
+
+#[inline]
+fn consume_bytes(x: &[u8], count: usize) -> Result<(&[u8], &[u8])> {
+    take::<usize, &[u8], ()>(count)(x).map_err(|_| Error::EOF)
+}
+
+#[inline]
+fn consume_end(x: &[u8], e: Error) -> Result<&[u8]> {
+    tag::<&[u8], &[u8], ()>(&[token::END])(x)
+        .map(|(rest, _)| rest)
+        .map_err(|_| e)
+}
+
+//////////////////////////////////////////////////////
+
+impl<'a> Deserializer<'a> {
+    fn peek_byte(&mut self, index: usize) -> Result<u8> {
+        self.data.get(index).ok_or(Error::EOF).map(|v| v.to_owned())
+    }
+
+    fn next_byte(&mut self) -> Result<u8> {
+        let byte = self.data.get(0).ok_or(Error::EOF).map(|b| b.to_owned())?;
+        self.data = &self.data[1..];
+
+        Ok(byte)
+    }
+
     fn parse_signed<T>(&mut self) -> Result<T>
     where
-        T: Neg<Output = T> + CheckedAdd + CheckedMul + From<i8>,
+        T: Signed + FromLexical,
     {
-        let mut integer = T::from(0);
-        let mut is_first_loop = true;
-        let mut is_negative = false;
+        let data = consume_integer_start(self.data)?;
+        let (data, number) = consume_signed_number::<T>(data)?;
+        self.data = consume_end(data, Error::ExpectedIntegerEnd)?;
 
-        loop {
-            match self.read.next_byte()? {
-                // Numbers (besides '0') get added to the final integer.
-                ch @ b'1'..=b'9' => {
-                    integer = match integer.checked_mul(&T::from(10)) {
-                        Some(i) => i,
-                        _ => return Err(Error::IntegerOverflow),
-                    };
-
-                    integer = match integer.checked_add(&T::from((ch - b'0') as i8)) {
-                        Some(i) => i,
-                        _ => return Err(Error::IntegerOverflow),
-                    };
-                }
-                // Number '0' is treated differently, as it cannot occur multiple
-                // times at the beginning.
-                // It will yield an error, if it happens to be on the beginning,
-                // while there are still some numbers left.
-                b'0' => {
-                    let next = self.read.peek_byte()?;
-                    if next != b'e' && is_first_loop {
-                        return Err(Error::ExpectedInteger);
-                    }
-
-                    integer = match integer.checked_mul(&T::from(10)) {
-                        Some(i) => i,
-                        _ => return Err(Error::IntegerOverflow),
-                    };
-                }
-                b'-' => {
-                    // Special case to check, if a negative symbol happens to be in
-                    // front of characters '0' or 'e', which are not valid negative
-                    // numbers.
-                    // Also, if the symbol happens to appear anywhere except at the
-                    // beginning, it will yield an error.
-                    let next = self.read.peek_byte()?;
-                    if next == b'0' || next == b'e' || !is_first_loop {
-                        return Err(Error::ExpectedInteger);
-                    }
-
-                    is_negative = true;
-                }
-                // Break the loop, if it's the end of integer.
-                b'e' => {
-                    // If an end has been occured, while at the beginning of an
-                    // integer, yield an error (it's not a number).
-                    if is_first_loop {
-                        return Err(Error::ExpectedInteger);
-                    }
-                    break;
-                }
-                // If an unexpecting character has been found.
-                _ => {
-                    return Err(Error::ExpectedInteger);
-                }
-            }
-
-            is_first_loop = false;
-        }
-
-        Ok(if is_negative { -integer } else { integer })
+        Ok(number)
     }
 
-    /// Parse a Bencode's unsigned integer value.
     fn parse_unsigned<T>(&mut self) -> Result<T>
     where
-        T: CheckedAdd + CheckedMul + From<u8>,
+        T: Unsigned + FromLexical,
     {
-        let mut integer = T::from(0);
-        let mut is_first_loop = true;
+        let data = consume_integer_start(self.data)?;
+        let (data, number) = consume_unsigned_number::<T>(data)?;
+        self.data = consume_end(data, Error::ExpectedIntegerEnd)?;
 
-        loop {
-            match self.read.next_byte()? {
-                // Numbers (besides '0'), get added to the final integer.
-                ch @ b'1'..=b'9' => {
-                    integer = match integer.checked_mul(&T::from(10)) {
-                        Some(i) => i,
-                        _ => return Err(Error::IntegerOverflow),
-                    };
-
-                    integer = match integer.checked_add(&T::from(ch - b'0')) {
-                        Some(i) => i,
-                        _ => return Err(Error::IntegerOverflow),
-                    };
-                }
-                // Number '0' is treated differently, as it cannot occur multiple
-                // times at the beginning.
-                // It will yield an error, if it happens to be on the beginning,
-                // while there are still some numbers left.
-                b'0' => {
-                    let next = self.read.peek_byte()?;
-                    if next != b'e' && is_first_loop {
-                        return Err(Error::ExpectedUnsignedInteger);
-                    }
-
-                    integer = match integer.checked_mul(&T::from(10)) {
-                        Some(i) => i,
-                        _ => return Err(Error::IntegerOverflow),
-                    };
-                }
-                // Break the loop, if it's the end of integer.
-                b'e' => {
-                    // If an end has been occured, while at the beginning of an
-                    // integer, yield an error (it's not a number).
-                    if is_first_loop {
-                        return Err(Error::ExpectedUnsignedInteger);
-                    }
-                    break;
-                }
-                // If an unexpecting character has been found.
-                _ => {
-                    return Err(Error::ExpectedUnsignedInteger);
-                }
-            }
-
-            is_first_loop = false;
-        }
-
-        Ok(integer)
+        Ok(number)
     }
 
-    /// Parse a Bencode's byte string length.
-    ///
-    /// The parsing is essentially the same as parsing an unsigned value
-    /// (since the byte string's length cannot be negative),
-    /// but with a different end delimiter.
-    fn parse_string_length<T>(&mut self) -> Result<T>
-    where
-        T: CheckedAdd + CheckedMul + From<u8>,
-    {
-        let mut integer = T::from(0);
-        let mut is_first_loop = true;
+    fn parse_bytes(&mut self) -> Result<&'a [u8]> {
+        let (data, count) = consume_unsigned_number::<usize>(self.data)?;
+        let data = consume_bytes_delimiter(data)?;
+        let (data, bytes) = consume_bytes(data, count)?;
+        self.data = data;
 
-        loop {
-            match self.read.next_byte()? {
-                // Numbers (besides '0'), get added to the final integer.
-                ch @ b'1'..=b'9' => {
-                    integer = match integer.checked_mul(&T::from(10)) {
-                        Some(i) => i,
-                        _ => return Err(Error::IntegerOverflow),
-                    };
-
-                    integer = match integer.checked_add(&T::from(ch - b'0')) {
-                        Some(i) => i,
-                        _ => return Err(Error::IntegerOverflow),
-                    };
-                }
-                // Number '0' is treated differently, as it cannot occur multiple
-                // times at the beginning.
-                // It will yield an error, if it happens to be on the beginning,
-                // while there are still some numbers left.
-                b'0' => {
-                    let next = self.read.peek_byte()?;
-                    if next != b':' && is_first_loop {
-                        return Err(Error::ExpectedStringIntegerLength);
-                    }
-
-                    integer = match integer.checked_mul(&T::from(10)) {
-                        Some(i) => i,
-                        _ => return Err(Error::IntegerOverflow),
-                    };
-                }
-                // Break the loop, if it's the end of string length.
-                b':' => {
-                    // If an end has been occured, while at the beginning of an
-                    // integer, yield an error (it's not a number).
-                    if is_first_loop {
-                        return Err(Error::ExpectedStringIntegerLength);
-                    }
-                    break;
-                }
-                // If an unexpecting byte has been found.
-                _ => {
-                    return Err(Error::ExpectedStringIntegerLength);
-                }
-            }
-
-            is_first_loop = false;
-        }
-
-        Ok(integer)
+        Ok(bytes)
     }
 
-    /// Parse a Bencode's byte string value as UTF-8 encoded string.
-    fn parse_string(&mut self) -> Result<&'de str> {
-        let length = self.parse_string_length::<usize>()?;
+    fn parse_string(&mut self) -> Result<&'a str> {
+        let bytes = self.parse_bytes()?;
+        let string = str::from_utf8(&bytes).map_err(|_| Error::InvalidUTF8)?;
 
-        // This will always be a positive length, but check, if the length is greater
-        // than zero.
-        if length > 0 {
-            // Assumption, that the deserialized value is a valid UTF-8 string.
-            let string = match str::from_utf8(self.read.next_bytes(length - 1)?) {
-                Ok(s) => s,
-                _ => return Err(Error::InvalidUnicodeCodePoint),
-            };
-            Ok(string)
-        } else {
-            Ok("")
-        }
+        Ok(string)
     }
 
-    /// Parse a Bencode's byte string value as bytes.
-    fn parse_bytes(&mut self) -> Result<&'de [u8]> {
-        let length = self.parse_string_length::<usize>()?;
-
-        // This will always be a positive length, but check, if the length is greater
-        // than zero.
-        if length > 0 {
-            let bytes = self.read.next_bytes(length - 1)?;
-            Ok(bytes)
-        } else {
-            Ok(&[])
-        }
-    }
-
-    /// Parse a Bencode's byte string value as a float.
     fn parse_float<T>(&mut self) -> Result<T>
     where
         T: Float + FromStr,
     {
-        let length = self.parse_string_length::<usize>()?;
+        let string = self.parse_string()?;
+        let float = string.parse::<T>().map_err(|_| Error::ExpectedFloat)?;
 
-        // This will always be a positive length, but check, if the length is greater
-        // than zero.
-        if length != 0 {
-            // Assumption, that the deserialized value is a valid UTF-8 string.
-            let string_float = match str::from_utf8(self.read.next_bytes(length - 1)?) {
-                Ok(s) => s,
-                _ => return Err(Error::InvalidUnicodeCodePoint),
-            };
-
-            let float = match string_float.parse::<T>() {
-                Ok(f) => f,
-                _ => return Err(Error::ExpectedFloat),
-            };
-
-            Ok(float)
-        } else {
-            Ok(T::from(0.0).unwrap())
-        }
+        Ok(float)
     }
 }
+
+//////////////////////////////////////////////////////
 
 macro_rules! fn_deserialize_unsigned {
     ($method:ident, $visit:ident, $type:ty) => {
         fn $method<V>(self, visitor: V) -> Result<V::Value>
         where
-            V: Visitor<'de>
+            V: de::Visitor<'de>,
         {
-            match self.read.next_byte()? {
-                b'i' => {
-                    if self.read.peek_byte()? == b'-' {
-                        return Err(Error::ExpectedUnsignedInteger);
-                    }
-                    visitor.$visit(self.parse_unsigned::<$type>()?)
-                }
-                _ => {
-                    Err(Error::ExpectedUnsignedInteger)
-                },
-            }
+            visitor.$visit(self.parse_unsigned::<$type>()?)
         }
     };
 }
@@ -361,67 +211,42 @@ macro_rules! fn_deserialize_signed {
     ($method:ident, $visit:ident, $type:ty) => {
         fn $method<V>(self, visitor: V) -> Result<V::Value>
         where
-            V: Visitor<'de>,
+            V: de::Visitor<'de>,
         {
-            match self.read.next_byte()? {
-                b'i' => visitor.$visit(self.parse_signed::<$type>()?),
-                _ => Err(Error::ExpectedInteger),
-            }
+            visitor.$visit(self.parse_signed::<$type>()?)
         }
     };
 }
 
-impl<'de, 'a, R: Read<'de>> de::Deserializer<'de> for &'a mut Deserializer<R> {
+impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
     type Error = Error;
 
-    /// Look at the input data to decide, what Serde data model type to deserialize as.
-    /// It will infer a Bencode type based on starting characters, useful when no
-    /// type was provided to `from_*` deserialization functions.
-    ///
-    /// Integers will be always deserialized to unsigned or signed type, depending on
-    /// a knowledge, if unparsed integer starts with a '-':
-    ///     - If it doesn't, the type of integer will be `u64`.
-    ///     - If it does, the type of integer will be `i64`.
-    ///
-    /// Not all data formats are able to support this operation & will result in an
-    /// UnknownType error.
-    ///
-    /// Can return errors when deserializing types.
     fn deserialize_any<V>(self, visitor: V) -> Result<V::Value>
     where
-        V: Visitor<'de>,
+        V: de::Visitor<'de>,
     {
-        match self.read.peek_byte()? {
+        match self.peek_byte(0)? {
             b'0'..=b'9' => self.deserialize_str(visitor),
-            b'i' => {
-                if self.read.peek_byte_nth(1)? != b'-' {
-                    self.deserialize_u64(visitor)
-                } else {
+            token::INTEGER_START => {
+                if let b'-' = self.peek_byte(1)? {
                     self.deserialize_i64(visitor)
+                } else {
+                    self.deserialize_u64(visitor)
                 }
             }
-            b'l' => self.deserialize_seq(visitor),
-            b'd' => self.deserialize_map(visitor),
+            token::LIST_START => self.deserialize_seq(visitor),
+            token::MAP_START => self.deserialize_map(visitor),
             _ => Err(Error::UnknownType),
         }
     }
 
-    /// See `Deserializer::deserialize_any` method.
     fn deserialize_ignored_any<V>(self, visitor: V) -> Result<V::Value>
     where
-        V: Visitor<'de>,
+        V: de::Visitor<'de>,
     {
         self.deserialize_any(visitor)
     }
 
-    /// Method definitions for various unsigned deserializations.
-    ///
-    /// Every definition guarantees, that it will use the appropriate type when
-    /// deserializing, saving it from using bigger, unnecessary unsigned types.
-    ///
-    /// This can overflow, if an input has a bigger size than expected type.
-    ///
-    /// Can return errors when deserializing unsigned types.
     fn_deserialize_unsigned!(deserialize_u8, visit_u8, u8);
     fn_deserialize_unsigned!(deserialize_u16, visit_u16, u16);
     fn_deserialize_unsigned!(deserialize_u32, visit_u32, u32);
@@ -430,14 +255,6 @@ impl<'de, 'a, R: Read<'de>> de::Deserializer<'de> for &'a mut Deserializer<R> {
         fn_deserialize_unsigned!(deserialize_u128, visit_u128, u128);
     }
 
-    /// Method definitions for various signed deserializations.
-    ///
-    /// Every definition guarantees, that it will use the appropriate type when
-    /// deserializing, saving it from using bigger, unnecessary signed types.
-    ///
-    /// This can overflow, if an input has a bigger size than expected type.
-    ///
-    /// Can return errors when deserializing signed types.
     fn_deserialize_signed!(deserialize_i8, visit_i8, i8);
     fn_deserialize_signed!(deserialize_i16, visit_i16, i16);
     fn_deserialize_signed!(deserialize_i32, visit_i32, i32);
@@ -448,98 +265,77 @@ impl<'de, 'a, R: Read<'de>> de::Deserializer<'de> for &'a mut Deserializer<R> {
 
     fn deserialize_str<V>(self, visitor: V) -> Result<V::Value>
     where
-        V: Visitor<'de>,
+        V: de::Visitor<'de>,
     {
-        match self.read.peek_byte()? {
-            b'0'..=b'9' => visitor.visit_borrowed_str(self.parse_string()?),
-            _ => Err(Error::ExpectedStringIntegerLength),
-        }
+        visitor.visit_borrowed_str(self.parse_string()?)
     }
 
-    /// See `Deserializer::deserialize_str` method.
     fn deserialize_string<V>(self, visitor: V) -> Result<V::Value>
     where
-        V: Visitor<'de>,
+        V: de::Visitor<'de>,
     {
         self.deserialize_str(visitor)
     }
 
-    /// See `Deserializer::deserialize_str` method.
     fn deserialize_identifier<V>(self, visitor: V) -> Result<V::Value>
     where
-        V: Visitor<'de>,
+        V: de::Visitor<'de>,
     {
         self.deserialize_str(visitor)
     }
 
-    /// Deserializes string as `f32`, since Bencode's integer doesn't allow floats.
     fn deserialize_f32<V>(self, visitor: V) -> Result<V::Value>
     where
-        V: Visitor<'de>,
+        V: de::Visitor<'de>,
     {
-        match self.read.peek_byte()? {
-            b'0'..=b'9' => visitor.visit_f32(self.parse_float::<f32>()?),
-            _ => Err(Error::ExpectedStringIntegerLength),
-        }
+        visitor.visit_f32(self.parse_float::<f32>()?)
     }
 
-    /// Deserializes string as `f64`, since Bencode's integer doesn't allow floats.
     fn deserialize_f64<V>(self, visitor: V) -> Result<V::Value>
     where
-        V: Visitor<'de>,
+        V: de::Visitor<'de>,
     {
-        match self.read.peek_byte()? {
-            b'0'..=b'9' => visitor.visit_f64(self.parse_float::<f64>()?),
-            _ => Err(Error::ExpectedStringIntegerLength),
-        }
+        visitor.visit_f64(self.parse_float::<f64>()?)
     }
 
     fn deserialize_bytes<V>(self, visitor: V) -> Result<V::Value>
     where
-        V: Visitor<'de>,
+        V: de::Visitor<'de>,
     {
-        match self.read.peek_byte()? {
-            b'0'..=b'9' => visitor.visit_borrowed_bytes(self.parse_bytes()?),
-            _ => Err(Error::ExpectedStringIntegerLength),
-        }
+        visitor.visit_borrowed_bytes(self.parse_bytes()?)
     }
 
     fn deserialize_byte_buf<V>(self, visitor: V) -> Result<V::Value>
     where
-        V: Visitor<'de>,
+        V: de::Visitor<'de>,
     {
-        match self.read.peek_byte()? {
-            b'0'..=b'9' => visitor.visit_borrowed_bytes(self.parse_bytes()?),
-            _ => Err(Error::ExpectedStringIntegerLength),
-        }
+        self.deserialize_bytes(visitor)
     }
 
     fn deserialize_seq<V>(mut self, visitor: V) -> Result<V::Value>
     where
-        V: Visitor<'de>,
+        V: de::Visitor<'de>,
     {
-        match self.read.next_byte()? {
-            b'l' => {
-                let value = visitor.visit_seq(ListDeserializer::new(&mut self))?;
-                if self.read.next_byte()? != b'e' {
-                    return Err(Error::ExpectedListEnd);
-                }
+        if let token::LIST_START = self.next_byte()? {
+            let value = visitor.visit_seq(ListDeserializer::new(&mut self))?;
 
+            if let token::END = self.next_byte()? {
                 Ok(value)
+            } else {
+                Err(Error::ExpectedListEnd)
             }
-            _ => Err(Error::ExpectedList),
+        } else {
+            Err(Error::ExpectedList)
         }
     }
 
-    /// See `Deserializer::deserialize_seq` method.
     fn deserialize_tuple<V>(self, _len: usize, visitor: V) -> Result<V::Value>
     where
-        V: Visitor<'de>,
+        V: de::Visitor<'de>,
     {
         self.deserialize_seq(visitor)
     }
 
-    /// See `Deserializer::deserialize_seq` method.
     fn deserialize_tuple_struct<V>(
         self,
         _name: &'static str,
@@ -547,29 +343,28 @@ impl<'de, 'a, R: Read<'de>> de::Deserializer<'de> for &'a mut Deserializer<R> {
         visitor: V,
     ) -> Result<V::Value>
     where
-        V: Visitor<'de>,
+        V: de::Visitor<'de>,
     {
         self.deserialize_seq(visitor)
     }
 
     fn deserialize_map<V>(mut self, visitor: V) -> Result<V::Value>
     where
-        V: Visitor<'de>,
+        V: de::Visitor<'de>,
     {
-        match self.read.next_byte()? {
-            b'd' => {
-                let value = visitor.visit_map(DictionaryDeserializer::new(&mut self))?;
-                if self.read.next_byte()? != b'e' {
-                    return Err(Error::ExpectedDictionaryEnd);
-                }
+        if let token::MAP_START = self.next_byte()? {
+            let value = visitor.visit_map(MapDeserializer::new(&mut self))?;
 
+            if let token::END = self.next_byte()? {
                 Ok(value)
+            } else {
+                Err(Error::ExpectedDictionaryEnd)
             }
-            _ => Err(Error::ExpectedDictionary),
+        } else {
+            Err(Error::ExpectedDictionary)
         }
     }
 
-    /// See `Deserializer::deserialize_map` method.
     fn deserialize_struct<V>(
         self,
         _name: &'static str,
@@ -577,7 +372,7 @@ impl<'de, 'a, R: Read<'de>> de::Deserializer<'de> for &'a mut Deserializer<R> {
         visitor: V,
     ) -> Result<V::Value>
     where
-        V: Visitor<'de>,
+        V: de::Visitor<'de>,
     {
         self.deserialize_map(visitor)
     }
@@ -589,68 +384,63 @@ impl<'de, 'a, R: Read<'de>> de::Deserializer<'de> for &'a mut Deserializer<R> {
     }
 }
 
-//////////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////
 
-struct ListDeserializer<'a, R: 'a> {
-    de: &'a mut Deserializer<R>,
+struct ListDeserializer<'de, 'a> {
+    de: &'a mut Deserializer<'de>,
 }
 
-impl<'a, R: 'a> ListDeserializer<'a, R> {
-    fn new(de: &'a mut Deserializer<R>) -> Self {
+impl<'de, 'a> ListDeserializer<'de, 'a> {
+    fn new(de: &'a mut Deserializer<'de>) -> Self {
         ListDeserializer { de }
     }
 }
 
-impl<'de, 'a, R: Read<'de> + 'a> de::SeqAccess<'de> for ListDeserializer<'a, R> {
+impl<'de, 'a> de::SeqAccess<'de> for ListDeserializer<'de, 'a> {
     type Error = Error;
 
     fn next_element_seed<T>(&mut self, seed: T) -> Result<Option<T::Value>>
     where
-        T: DeserializeSeed<'de>,
+        T: de::DeserializeSeed<'de>,
     {
-        if self.de.read.peek_byte()? == b'e' {
-            return Ok(None);
+        if let token::END = self.de.peek_byte(0)? {
+            Ok(None)
+        } else {
+            seed.deserialize(&mut *self.de).map(Some)
         }
-
-        // Deserialize an array element.
-        seed.deserialize(&mut *self.de).map(Some)
     }
 }
 
-//////////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////
 
-struct DictionaryDeserializer<'a, R: 'a> {
-    de: &'a mut Deserializer<R>,
+struct MapDeserializer<'de, 'a> {
+    de: &'a mut Deserializer<'de>,
 }
 
-impl<'a, R: 'a> DictionaryDeserializer<'a, R> {
-    fn new(de: &'a mut Deserializer<R>) -> Self {
-        DictionaryDeserializer { de }
+impl<'de, 'a> MapDeserializer<'de, 'a> {
+    fn new(de: &'a mut Deserializer<'de>) -> Self {
+        MapDeserializer { de }
     }
 }
 
-impl<'de, 'a, R: Read<'de> + 'a> de::MapAccess<'de> for DictionaryDeserializer<'a, R> {
+impl<'de, 'a> de::MapAccess<'de> for MapDeserializer<'de, 'a> {
     type Error = Error;
 
     fn next_key_seed<K>(&mut self, seed: K) -> Result<Option<K::Value>>
     where
-        K: DeserializeSeed<'de>,
+        K: de::DeserializeSeed<'de>,
     {
-        match self.de.read.peek_byte()? {
-            b'e' => return Ok(None),
-            b'0'..=b'9' => {}
-            _ => return Err(Error::ExpectedDictionaryKeyString),
-        };
-
-        // Deserialize a map key.
-        seed.deserialize(&mut *self.de).map(Some)
+        match self.de.peek_byte(0)? {
+            token::END => Ok(None),
+            b'0'..=b'9' => seed.deserialize(&mut *self.de).map(Some),
+            _ => Err(Error::ExpectedDictionaryKeyString),
+        }
     }
 
     fn next_value_seed<V>(&mut self, seed: V) -> Result<V::Value>
     where
-        V: DeserializeSeed<'de>,
+        V: de::DeserializeSeed<'de>,
     {
-        // Deserialize a map value.
         seed.deserialize(&mut *self.de)
     }
 }

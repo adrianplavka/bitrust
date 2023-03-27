@@ -1,165 +1,129 @@
 //! Bencode errors and result type for serialization & deserialization.
 
-use std::error;
-use std::fmt::{self, Debug, Display};
-use std::io;
-use std::result;
+use std::fmt::Display;
 
-use serde::de;
-use serde::ser;
+use serde::{de, ser};
+use thiserror::Error;
 
-/// This type represents all possible errors that can occur during Bencode
-/// serialization & deserialization.
-#[derive(PartialEq)]
+#[derive(Debug, Error)]
 pub enum Error {
     /// Catch-all for deserialization & serialization error messages.
+    #[error("{0}")]
     Message(Box<str>),
 
     /// ExpectedInteger occurs, when a signed integer was expected at the position
     /// during deserialization.
+    #[error("Expected integer")]
     ExpectedInteger,
 
-    /// ExpectedUnsignedInteger occurs, when an unsigned integer was expected at
+    /// ExpectedSignedNumber occurs, when a signed integer was expected at
     /// the position during deserialization.
-    ExpectedUnsignedInteger,
+    #[error("Expected signed number")]
+    ExpectedSignedNumber,
 
-    /// IntegerOverflow occurs, when an integer overflows during deserialization
-    /// of a type smaller than integer input.
-    IntegerOverflow,
+    /// ExpectedUnsignedNumber occurs, when an unsigned integer was expected at
+    /// the position during deserialization.
+    #[error("Expected unsigned number")]
+    ExpectedUnsignedNumber,
+
+    /// ExpectedIntegerEnd occurs, when an integer's end was expected at the position
+    /// during deserialization.
+    #[error("Expected integer end")]
+    ExpectedIntegerEnd,
 
     /// ExpectedStringIntegerLength occurs, when a length of string has not been
     /// specified, or is of an unappropriate type during deserialization.
+    #[error("Expected string integer length")]
     ExpectedStringIntegerLength,
 
-    /// InvalidUnicodeCodePoint occurs, when parsing of a string has failed during
-    /// deserialization (it is not in UTF-8).
-    InvalidUnicodeCodePoint,
+    /// InvalidUTF8 occurs, when parsing of a string has failed during
+    /// serialization or deserialization (it is not in UTF-8).
+    #[error("Invalid UTF-8")]
+    InvalidUTF8,
+
+    /// IntegerOverflow occurs, when an integer overflows during deserialization
+    /// of a type smaller than integer input.
+    #[error{"Integer overflow"}]
+    IntegerOverflow,
 
     /// ExpectedFloat occurs, when parsing string to float has failed during
     /// deserialization.
+    #[error("Expected float")]
     ExpectedFloat,
 
     /// ExpectedList occurs, when a list was expected at the position during
     /// deserialization.
+    #[error("Expected list")]
     ExpectedList,
 
     /// ExpectedListEnd occurs, when a list's end was expected at the position during
     /// deserialization.
+    #[error("Expected list end")]
     ExpectedListEnd,
 
     /// ExpectedDictionary occurs, when a dictionary was expected at the position
     /// during deserialization.
+    #[error("Expected dictionary")]
     ExpectedDictionary,
 
     /// ExpectedDictionaryEnd occurs, when a dictionary's end was expected at the
     /// position during deserialization.
+    #[error("Expected dictionary length")]
     ExpectedDictionaryEnd,
 
     /// ExpectedDictionaryKeyString occurs, when dictionary's key has not been
     /// specified, or is of an unappropriate type during deserialization.
+    #[error("Expected dictionary key")]
     ExpectedDictionaryKeyString,
 
     /// UnknownType occurs, when the data is impossible to infer from during
     /// deserialization.
+    #[error("Unknown type")]
     UnknownType,
 
     /// TrailingCharacter occurs, when the input contains additional trailing
     /// characters after deserializing.
+    #[error("Trailing characters")]
     TrailingCharacters,
 
     /// EOF occurs, when reading from an input hits an unexpected end during
     /// deserialization.
+    #[error("Unexpected EOF")]
     EOF,
+
+    /// IO occurs, when caused by a failure to read or write bytes on an IO
+    /// stream.
+    #[error(transparent)]
+    IO(#[from] std::io::Error),
 }
 
-/// Typedef for `Result` with an own error implementation.
-pub type Result<T> = result::Result<T, Error>;
-
-impl error::Error for Error {}
-
-impl From<Error> for io::Error {
-    fn from(e: Error) -> Self {
-        match e {
-            Error::Message(_)
-            | Error::ExpectedInteger
-            | Error::ExpectedUnsignedInteger
-            | Error::IntegerOverflow
-            | Error::ExpectedStringIntegerLength
-            | Error::InvalidUnicodeCodePoint
-            | Error::ExpectedFloat
-            | Error::ExpectedList
-            | Error::ExpectedListEnd
-            | Error::ExpectedDictionary
-            | Error::ExpectedDictionaryEnd
-            | Error::ExpectedDictionaryKeyString
-            | Error::UnknownType
-            | Error::TrailingCharacters => io::Error::new(io::ErrorKind::InvalidData, e),
-            Error::EOF => io::Error::new(io::ErrorKind::UnexpectedEof, e),
-        }
-    }
-}
-
-impl Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match *self {
-            Error::Message(ref m) => f.write_str(m),
-            Error::ExpectedInteger => f.write_str("[bitrust_bencode error]: expected integer"),
-            Error::ExpectedUnsignedInteger => {
-                f.write_str("[bitrust_bencode error]: expected unsigned integer")
-            }
-            Error::IntegerOverflow => f.write_str("[bitrust_bencode error]: integer overflow"),
-            Error::ExpectedStringIntegerLength => {
-                f.write_str("[bitrust_bencode error]: expected string's integer length")
-            }
-            Error::InvalidUnicodeCodePoint => {
-                f.write_str("[bitrust_bencode error]: invalid unicode code point")
-            }
-            Error::ExpectedFloat => f.write_str("[bitrust_bencode error]: expected float"),
-            Error::ExpectedList => f.write_str("[bitrust_bencode error]: expected list"),
-            Error::ExpectedListEnd => f.write_str("[bitrust_bencode error]: expected list's end"),
-            Error::ExpectedDictionary => {
-                f.write_str("[bitrust_bencode error]: expected dictionary")
-            }
-            Error::ExpectedDictionaryEnd => {
-                f.write_str("[bitrust_bencode error]: expected dictionary's end")
-            }
-            Error::ExpectedDictionaryKeyString => {
-                f.write_str("[bitrust_bencode error]: expected dictionary's key string")
-            }
-            Error::UnknownType => f.write_str("[bitrust_bencode error]: unknown type"),
-            Error::TrailingCharacters => {
-                f.write_str("[bitrust_bencode error]: trailing characters")
-            }
-            Error::EOF => f.write_str("[bitrust_bencode error]: unexpected end"),
-        }
-    }
-}
-
-impl Debug for Error {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "error({:?})", self.to_string())
-    }
-}
+pub type Result<T> = std::result::Result<T, Error>;
 
 impl de::Error for Error {
     #[cold]
-    fn custom<T: Display>(msg: T) -> Error {
+    fn custom<T: Display>(msg: T) -> Self
+    where
+        T: Display,
+    {
         Error::Message(msg.to_string().into_boxed_str())
     }
 
     #[cold]
     fn invalid_type(unexp: de::Unexpected, exp: &dyn de::Expected) -> Self {
         if let de::Unexpected::Unit = unexp {
-            Error::custom(format_args!("invalid type: null, expected {}", exp))
+            Error::custom(format_args!("invalid_type: null, expected: {}", exp))
         } else {
-            Error::custom(format_args!("invalid type: {}, expected {}", unexp, exp))
+            Error::custom(format_args!("invalid type: {}, expected: {}", unexp, exp))
         }
     }
 }
 
 impl ser::Error for Error {
     #[cold]
-    fn custom<T: Display>(msg: T) -> Error {
+    fn custom<T: Display>(msg: T) -> Self
+    where
+        T: Display,
+    {
         Error::Message(msg.to_string().into_boxed_str())
     }
 }

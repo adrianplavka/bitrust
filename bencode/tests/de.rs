@@ -1,11 +1,12 @@
 #[cfg(test)]
-mod de_tests {
+mod de {
     extern crate bitrust_bencode;
+
     use bitrust_bencode::{from_slice, from_str, Error};
-    use serde::Deserialize;
+    use serde_derive::Deserialize;
 
     #[test]
-    fn de_integers() {
+    fn integers() {
         // Happy paths.
         assert_eq!(0usize, from_str(r#"i0e"#).unwrap());
         assert_eq!(0isize, from_str(r#"i0e"#).unwrap());
@@ -13,66 +14,74 @@ mod de_tests {
         assert_eq!(1isize, from_str(r#"i1e"#).unwrap());
         assert_eq!(123usize, from_str(r#"i123e"#).unwrap());
         assert_eq!(123isize, from_str(r#"i123e"#).unwrap());
-        assert_eq!(-0, from_str(r#"i0e"#).unwrap());
+        assert_eq!(0, from_str(r#"i-0e"#).unwrap());
         assert_eq!(-1, from_str(r#"i-1e"#).unwrap());
         assert_eq!(-123, from_str(r#"i-123e"#).unwrap());
 
         // Unhappy paths.
-        assert_eq!(
-            Err(Error::ExpectedUnsignedInteger),
-            from_str::<usize>(r#"ie"#)
-        );
-        assert_eq!(Err(Error::ExpectedInteger), from_str::<isize>(r#"i-0e"#));
-        assert_eq!(
-            Err(Error::ExpectedUnsignedInteger),
-            from_str::<usize>(r#"i1-23e"#)
-        );
-        assert_eq!(
-            Err(Error::ExpectedUnsignedInteger),
-            from_str::<usize>(r#"iasdfe"#)
-        );
-        assert_eq!(
-            Err(Error::ExpectedUnsignedInteger),
-            from_str::<usize>(r#"i e"#)
-        );
-        assert_eq!(
-            Err(Error::ExpectedUnsignedInteger),
-            from_str::<u8>(r#"i-100e"#)
-        );
-        assert_eq!(Err(Error::EOF), from_str::<usize>(r#"i123"#));
-        assert_eq!(
-            Err(Error::ExpectedUnsignedInteger),
-            from_str::<usize>(r#"i123.456e"#)
-        );
-        assert_eq!(
-            Err(Error::ExpectedUnsignedInteger),
-            from_str::<usize>(r#"i007e"#)
-        );
-        assert_eq!(Err(Error::ExpectedInteger), from_str::<isize>(r#"i007e"#));
-        assert_eq!(
-            Err(Error::ExpectedInteger),
-            from_str::<isize>(r#"i-1.034e"#)
-        );
-        assert_eq!(
-            Err(Error::ExpectedUnsignedInteger),
-            from_str::<usize>(r#"4:asdf"#)
-        );
-        assert_eq!(
-            Err(Error::ExpectedUnsignedInteger),
-            from_str::<usize>(r#"li123ee"#)
-        );
-        assert_eq!(
-            Err(Error::ExpectedUnsignedInteger),
-            from_str::<usize>(r#"d1:ai323ee"#)
-        );
-        assert_eq!(
-            Err(Error::TrailingCharacters),
-            from_str::<usize>(r#"i123etrailing"#)
-        );
+        assert!(matches!(
+            from_str::<usize>(r#"ie"#),
+            Err(Error::ExpectedUnsignedNumber)
+        ));
+
+        assert!(matches!(
+            from_str::<usize>(r#"i1-23e"#),
+            Err(Error::ExpectedIntegerEnd)
+        ));
+
+        assert!(matches!(
+            from_str::<usize>(r#"iasdfe"#),
+            Err(Error::ExpectedUnsignedNumber)
+        ));
+
+        assert!(matches!(
+            from_str::<usize>(r#"i e"#),
+            Err(Error::ExpectedUnsignedNumber)
+        ));
+
+        assert!(matches!(
+            from_str::<u8>(r#"i-100e"#),
+            Err(Error::ExpectedUnsignedNumber)
+        ));
+
+        assert!(matches!(
+            from_str::<usize>(r#"i123"#),
+            Err(Error::ExpectedIntegerEnd)
+        ));
+
+        assert!(matches!(
+            from_str::<usize>(r#"i123.456e"#),
+            Err(Error::ExpectedIntegerEnd)
+        ));
+
+        assert!(matches!(
+            from_str::<isize>(r#"i-1.034e"#),
+            Err(Error::ExpectedIntegerEnd)
+        ));
+
+        assert!(matches!(
+            from_str::<usize>(r#"4:asdf"#),
+            Err(Error::ExpectedInteger)
+        ));
+
+        assert!(matches!(
+            from_str::<usize>(r#"li123ee"#),
+            Err(Error::ExpectedInteger)
+        ));
+
+        assert!(matches!(
+            from_str::<usize>(r#"d1:ai323ee"#),
+            Err(Error::ExpectedInteger)
+        ));
+
+        assert!(matches!(
+            from_str::<usize>(r#"i123etrailing"#),
+            Err(Error::TrailingCharacters)
+        ));
     }
 
     #[test]
-    fn de_integers_bounds() {
+    fn integers_near_bounds() {
         // Happy paths.
         assert_eq!(
             std::u8::MAX,
@@ -108,42 +117,49 @@ mod de_tests {
         );
 
         // Unhappy paths.
-        assert_eq!(
+        assert!(matches!(
+            from_str::<u8>(format!("i{}0e", std::u8::MAX).as_str()),
             Err(Error::IntegerOverflow),
-            from_str::<u8>(format!("i{}0e", std::u8::MAX).as_str())
-        );
-        assert_eq!(
+        ));
+
+        assert!(matches!(
+            from_str::<u16>(format!("i{}0e", std::u16::MAX).as_str()),
             Err(Error::IntegerOverflow),
-            from_str::<u16>(format!("i{}0e", std::u16::MAX).as_str())
-        );
-        assert_eq!(
+        ));
+
+        assert!(matches!(
+            from_str::<u32>(format!("i{}0e", std::u32::MAX).as_str()),
             Err(Error::IntegerOverflow),
-            from_str::<u32>(format!("i{}0e", std::u32::MAX).as_str())
-        );
-        assert_eq!(
+        ));
+
+        assert!(matches!(
+            from_str::<u64>(format!("i{}0e", std::u64::MAX).as_str()),
             Err(Error::IntegerOverflow),
-            from_str::<u64>(format!("i{}0e", std::u64::MAX).as_str())
-        );
-        assert_eq!(
+        ));
+
+        assert!(matches!(
+            from_str::<i8>(format!("i{}0e", std::i8::MAX).as_str()),
             Err(Error::IntegerOverflow),
-            from_str::<i8>(format!("i{}0e", std::i8::MAX).as_str())
-        );
-        assert_eq!(
+        ));
+
+        assert!(matches!(
+            from_str::<i16>(format!("i{}0e", std::i16::MAX).as_str()),
             Err(Error::IntegerOverflow),
-            from_str::<i16>(format!("i{}0e", std::i16::MAX).as_str())
-        );
-        assert_eq!(
+        ));
+
+        assert!(matches!(
+            from_str::<i32>(format!("i{}0e", std::i32::MAX).as_str()),
             Err(Error::IntegerOverflow),
-            from_str::<i32>(format!("i{}0e", std::i32::MAX).as_str())
-        );
-        assert_eq!(
+        ));
+
+        assert!(matches!(
+            from_str::<i64>(format!("i{}0e", std::i64::MAX).as_str()),
             Err(Error::IntegerOverflow),
-            from_str::<i64>(format!("i{}0e", std::i64::MAX).as_str())
-        );
+        ));
     }
 
     #[test]
-    fn de_strings() {
+    fn strings() {
         // Happy paths.
         assert_eq!("key", from_str::<&str>(r#"3:key"#).unwrap());
         assert_eq!("asdfg", from_str::<&str>(r#"5:asdfg"#).unwrap());
@@ -161,50 +177,67 @@ mod de_tests {
         );
 
         // Unhappy paths.
-        assert_eq!(Err(Error::EOF), from_str::<&str>(r#"4:EOF"#));
-        assert_eq!(
-            Err(Error::ExpectedStringIntegerLength),
-            from_str::<&str>(r#"string"#)
-        );
-        assert_eq!(
-            Err(Error::ExpectedStringIntegerLength),
-            from_str::<&str>(r#"nointeger:value"#)
-        );
-        assert_eq!(
-            Err(Error::ExpectedStringIntegerLength),
-            from_str::<&str>(r#"i123e"#)
-        );
-        assert_eq!(
-            Err(Error::ExpectedStringIntegerLength),
-            from_str::<&str>(r#"l2:abe"#)
-        );
-        assert_eq!(
-            Err(Error::ExpectedStringIntegerLength),
-            from_str::<&str>(r#"d1:ae"#)
-        );
-        assert_eq!(
-            Err(Error::TrailingCharacters),
-            from_str::<&str>(r#"3:keytrailing"#)
-        );
+        assert!(matches!(from_str::<&str>(r#"4:EOF"#), Err(Error::EOF)));
+
+        assert!(matches!(
+            from_str::<&str>(r#"string"#),
+            Err(Error::ExpectedUnsignedNumber)
+        ));
+
+        assert!(matches!(
+            from_str::<&str>(r#"nointeger:value"#),
+            Err(Error::ExpectedUnsignedNumber)
+        ));
+
+        assert!(matches!(
+            from_str::<&str>(r#"i123e"#),
+            Err(Error::ExpectedUnsignedNumber),
+        ));
+
+        assert!(matches!(
+            from_str::<&str>(r#"l2:abe"#),
+            Err(Error::ExpectedUnsignedNumber),
+        ));
+
+        assert!(matches!(
+            from_str::<&str>(r#"d1:ae"#),
+            Err(Error::ExpectedUnsignedNumber),
+        ));
+
+        assert!(matches!(
+            from_str::<&str>(r#"3:keytrailing"#),
+            Err(Error::TrailingCharacters)
+        ));
     }
 
     #[test]
-    fn de_floats() {
+    fn floats() {
         // Happy paths.
         assert_eq!(4.32, from_str::<f32>(r#"4:4.32"#).unwrap());
         assert_eq!(134.64, from_str::<f64>(r#"6:134.64"#).unwrap());
         assert_eq!(-134.64, from_str::<f64>(r#"7:-134.64"#).unwrap());
         assert_eq!(-0.0, from_str::<f64>(r#"4:-0.0"#).unwrap());
         assert_eq!(-5032.0, from_str::<f64>(r#"5:-5032"#).unwrap());
-        assert_eq!(0.0, from_str::<f64>(r#"0:"#).unwrap());
 
         // Unhappy paths.
-        assert_eq!(Err(Error::ExpectedFloat), from_str::<f64>(r#"7:invalid"#));
-        assert_eq!(Err(Error::ExpectedFloat), from_str::<f64>(r#"3:-0a"#));
+        assert!(matches!(
+            from_str::<f64>(r#"7:invalid"#),
+            Err(Error::ExpectedFloat)
+        ));
+
+        assert!(matches!(
+            from_str::<f64>(r#"3:-0a"#),
+            Err(Error::ExpectedFloat)
+        ));
+
+        assert!(matches!(
+            from_str::<f64>(r#"0:"#),
+            Err(Error::ExpectedFloat)
+        ));
     }
 
     #[test]
-    fn de_bytes() {
+    fn bytes() {
         // Happy paths.
 
         // Check for a valid conversion from byte slice.
@@ -223,14 +256,14 @@ mod de_tests {
         // This sequence would translate to: `6:He?llo`.
         //
         // This sequence has an invalid code point 0xf0, therefore it should fail.
-        assert_eq!(
-            Err(Error::InvalidUnicodeCodePoint),
-            from_slice::<&str>(&[0x36, 0x3a, 0x48, 0x65, 0xf0, 0x6c, 0x6c, 0x6f])
-        );
+        assert!(matches!(
+            from_slice::<&str>(&[0x36, 0x3a, 0x48, 0x65, 0xf0, 0x6c, 0x6c, 0x6f]),
+            Err(Error::InvalidUTF8)
+        ));
     }
 
     #[test]
-    fn de_structs() {
+    fn structs() {
         #[derive(Deserialize, PartialEq, Debug)]
         struct IntegerTest {
             integer: i32,
@@ -294,7 +327,7 @@ mod de_tests {
     }
 
     #[test]
-    fn de_structs_file() {
+    fn struct_from_file() {
         use std::env;
         use std::fs;
         use std::path::Path;

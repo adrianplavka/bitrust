@@ -1,52 +1,60 @@
 #[cfg(test)]
-mod ser_tests {
+mod ser {
     extern crate bitrust_bencode;
+
     use bitrust_bencode::to_string;
-    use serde::Serialize;
+    use serde_derive::Serialize;
 
     #[test]
-    fn ser_integers() {
-        assert_eq!(r#"i0e"#, to_string(&0usize).unwrap());
-        assert_eq!(r#"i0e"#, to_string(&0isize).unwrap());
-        assert_eq!(r#"i1e"#, to_string(&1usize).unwrap());
-        assert_eq!(r#"i1e"#, to_string(&1isize).unwrap());
-        assert_eq!(r#"i123e"#, to_string(&123usize).unwrap());
-        assert_eq!(r#"i123e"#, to_string(&123isize).unwrap());
-        assert_eq!(r#"i0e"#, to_string(&-0).unwrap());
-        assert_eq!(r#"i-1e"#, to_string(&-1).unwrap());
-        assert_eq!(r#"i-123e"#, to_string(&-123).unwrap());
+    fn integers() {
+        assert_eq!("i0e", to_string(&0usize).unwrap());
+        assert_eq!("i0e", to_string(&0isize).unwrap());
+        assert_eq!("i1e", to_string(&1usize).unwrap());
+        assert_eq!("i1e", to_string(&1isize).unwrap());
+        assert_eq!("i123e", to_string(&123usize).unwrap());
+        assert_eq!("i123e", to_string(&123isize).unwrap());
+        assert_eq!("i0e", to_string(&-0).unwrap());
+        assert_eq!("i-1e", to_string(&-1).unwrap());
+        assert_eq!("i-123e", to_string(&-123).unwrap());
     }
 
     #[test]
-    fn ser_integers_bounds() {
+    fn integers_near_bounds() {
         assert_eq!(
             format!("i{}e", std::u8::MAX),
             to_string(&std::u8::MAX).unwrap()
         );
+
         assert_eq!(
             format!("i{}e", std::u16::MAX),
             to_string(&std::u16::MAX).unwrap()
         );
+
         assert_eq!(
             format!("i{}e", std::u32::MAX),
             to_string(&std::u32::MAX).unwrap()
         );
+
         assert_eq!(
             format!("i{}e", std::u64::MAX),
             to_string(&std::u64::MAX).unwrap()
         );
+
         assert_eq!(
             format!("i{}e", std::i8::MAX),
             to_string(&std::i8::MAX).unwrap()
         );
+
         assert_eq!(
             format!("i{}e", std::i16::MAX),
             to_string(&std::i16::MAX).unwrap()
         );
+
         assert_eq!(
             format!("i{}e", std::i32::MAX),
             to_string(&std::i32::MAX).unwrap()
         );
+
         assert_eq!(
             format!("i{}e", std::i64::MAX),
             to_string(&std::i64::MAX).unwrap()
@@ -54,13 +62,19 @@ mod ser_tests {
     }
 
     #[test]
-    fn ser_strings() {
-        assert_eq!(r#"3:key"#, to_string(&"key").unwrap());
-        assert_eq!(r#"5:asdfg"#, to_string(&"asdfg").unwrap());
-        assert_eq!(r#"4:0087"#, to_string(&"0087").unwrap());
-        assert_eq!(r#"0:"#, to_string(&"").unwrap());
-        assert_eq!(r#"2:  "#, to_string(&"  ").unwrap());
-        assert_eq!(r#"6:❤️"#, to_string(&"❤️").unwrap());
+    fn bools() {
+        assert_eq!("4:true", to_string(&true).unwrap());
+        assert_eq!("5:false", to_string(&false).unwrap());
+    }
+
+    #[test]
+    fn strings() {
+        assert_eq!("3:key", to_string(&"key").unwrap());
+        assert_eq!("5:asdfg", to_string(&"asdfg").unwrap());
+        assert_eq!("4:0087", to_string(&"0087").unwrap());
+        assert_eq!("0:", to_string(&"").unwrap());
+        assert_eq!("2:  ", to_string(&"  ").unwrap());
+        assert_eq!("6:❤️", to_string(&"❤️").unwrap());
         assert_eq!(
             r#"21:!@#$%^&*()_+{}|:<>?"/"#,
             to_string(&"!@#$%^&*()_+{}|:<>?\"/").unwrap()
@@ -72,7 +86,7 @@ mod ser_tests {
     }
 
     #[test]
-    fn ser_structs() {
+    fn structs() {
         #[derive(Serialize, PartialEq, Debug)]
         struct IntegerTest {
             integer: i32,

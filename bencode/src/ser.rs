@@ -1,46 +1,67 @@
-//! Bencode serialization using Serde library.
+//! Bencode serialization.
 
-use std::str;
-use std::string::ToString;
+use std::{io::Write, str, string::ToString};
 
-use serde::ser::{self, Serialize};
+use crate::{
+    error::{Error, Result},
+    token,
+};
 
-use crate::error::{Error, Result};
+use serde::{ser, Serialize};
 
+/// A structure that serializes Rust values into Bencode.
 pub struct Serializer {
-    /// This string starts empty and values are appended as it's
-    /// being serialized.
-    output: String,
-}
-
-pub fn to_string<T>(value: &T) -> Result<String>
-where
-    T: Serialize,
-{
-    let mut serializer = Serializer {
-        output: String::new(),
-    };
-    value.serialize(&mut serializer)?;
-
-    Ok(serializer.output)
+    data: Vec<u8>,
 }
 
 impl Serializer {
-    fn serialize_integer<T>(&mut self, integer: T) -> Result<()>
+    pub fn new() -> Self {
+        Serializer { data: Vec::new() }
+    }
+}
+
+/// Serializes a value into a `Vec` of bytes containing Bencode value.
+pub fn to_vec<T>(value: &T) -> Result<Vec<u8>>
+where
+    T: ser::Serialize,
+{
+    let mut ser = Serializer::new();
+
+    value.serialize(&mut ser)?;
+
+    Ok(ser.data)
+}
+
+/// Serializes a value into a `String` containing Bencode value.
+pub fn to_string<T>(value: &T) -> Result<String>
+where
+    T: ser::Serialize,
+{
+    let mut ser = Serializer::new();
+
+    value.serialize(&mut ser)?;
+
+    let string = String::from_utf8(ser.data).map_err(|_| Error::InvalidUTF8)?;
+    Ok(string)
+}
+
+impl Serializer {
+    fn serialize_integer<T>(&mut self, value: T) -> Result<()>
     where
         T: ToString,
     {
-        self.output += "i";
-        self.output += &integer.to_string();
-        self.output += "e";
+        self.data.write(&[token::INTEGER_START])?;
+        self.data.write(value.to_string().as_bytes())?;
+        self.data.write(&[token::END])?;
+
         Ok(())
     }
 }
 
 macro_rules! fn_serialize_integer {
     ($method:ident, $type:ty) => {
-        fn $method(self, v: $type) -> Result<()> {
-            self.serialize_integer(v)
+        fn $method(self, value: $type) -> Result<()> {
+            self.serialize_integer(value)
         }
     };
 }
@@ -73,39 +94,38 @@ impl<'a> ser::Serializer for &'a mut Serializer {
         fn_serialize_integer!(serialize_i128, i128);
     }
 
-    fn serialize_bool(self, v: bool) -> Result<()> {
-        self.output += if v { "4:true" } else { "5:false" };
+    fn serialize_str(self, value: &str) -> Result<()> {
+        self.data.write(value.len().to_string().as_bytes())?;
+        self.data.write(&[token::BYTES_DELIMITER])?;
+        self.data.write(value.as_bytes())?;
+
         Ok(())
     }
 
-    fn serialize_str(self, v: &str) -> Result<()> {
-        self.output += (v.len() as u64).to_string().as_str();
-        self.output += ":";
-        self.output += v;
+    fn serialize_bool(self, value: bool) -> Result<()> {
+        self.serialize_str(if value { "true" } else { "false" })
+    }
+
+    fn serialize_char(self, value: char) -> Result<()> {
+        self.serialize_str(&value.to_string())
+    }
+
+    fn serialize_f32(self, value: f32) -> Result<()> {
+        self.serialize_str(&value.to_string())
+    }
+
+    fn serialize_f64(self, value: f64) -> Result<()> {
+        self.serialize_str(&value.to_string())
+    }
+
+    fn serialize_bytes(self, value: &[u8]) -> Result<()> {
+        self.data.write(value)?;
+
         Ok(())
     }
 
-    fn serialize_char(self, v: char) -> Result<()> {
-        self.serialize_str(&v.to_string())
-    }
-
-    /// Serializes `f32` as a string, since Bencode's integer doesn't allow floats.
-    fn serialize_f32(self, v: f32) -> Result<()> {
-        self.serialize_str(&v.to_string())
-    }
-
-    /// Serializes `f64` as a string, since Bencode's integer doesn't allow floats.
-    fn serialize_f64(self, v: f64) -> Result<()> {
-        self.serialize_str(&v.to_string())
-    }
-
-    fn serialize_bytes(self, _v: &[u8]) -> Result<()> {
-        unimplemented!()
-    }
-
-    /// TODO: How to signal a `null` value in Bencode?
     fn serialize_none(self) -> Result<()> {
-        unimplemented!()
+        Ok(())
     }
 
     /// A present optional is represented as just the contained value. Note that
@@ -115,14 +135,13 @@ impl<'a> ser::Serializer for &'a mut Serializer {
     /// to behave more intelligently if possible.
     fn serialize_some<T>(self, value: &T) -> Result<()>
     where
-        T: ?Sized + Serialize,
+        T: ?Sized + ser::Serialize,
     {
         value.serialize(self)
     }
 
-    /// In Serde, unit means an anonymous value containing no data.
     fn serialize_unit(self) -> Result<()> {
-        unimplemented!()
+        Ok(())
     }
 
     /// Unit struct means a named value containing no data. Again, since there is
@@ -148,7 +167,7 @@ impl<'a> ser::Serializer for &'a mut Serializer {
     /// insignificant wrappers around the data they contain.
     fn serialize_newtype_struct<T>(self, _name: &'static str, value: &T) -> Result<()>
     where
-        T: ?Sized + Serialize,
+        T: ?Sized + ser::Serialize,
     {
         value.serialize(self)
     }
@@ -167,12 +186,15 @@ impl<'a> ser::Serializer for &'a mut Serializer {
         value: &T,
     ) -> Result<()>
     where
-        T: ?Sized + Serialize,
+        T: ?Sized + ser::Serialize,
     {
-        self.output += "d";
+        self.data.write(&[token::MAP_START])?;
+
         variant.serialize(&mut *self)?;
         value.serialize(&mut *self)?;
-        self.output += "e";
+
+        self.data.write(&[token::END])?;
+
         Ok(())
     }
 
@@ -180,7 +202,8 @@ impl<'a> ser::Serializer for &'a mut Serializer {
     /// method calls. This one is responsible only for serializing the start,
     /// which in Bencode is 'l'.
     fn serialize_seq(self, _len: Option<usize>) -> Result<Self::SerializeSeq> {
-        self.output += "l";
+        self.data.write(&[token::LIST_START])?;
+
         Ok(self)
     }
 
@@ -209,14 +232,18 @@ impl<'a> ser::Serializer for &'a mut Serializer {
         variant: &'static str,
         _len: usize,
     ) -> Result<Self::SerializeTupleVariant> {
-        self.output += "d";
+        self.data.write(&[token::MAP_START])?;
+
         variant.serialize(&mut *self)?;
-        self.output += "l";
+
+        self.data.write(&[token::LIST_START])?;
+
         Ok(self)
     }
 
     fn serialize_map(self, _len: Option<usize>) -> Result<Self::SerializeMap> {
-        self.output += "d";
+        self.data.write(&[token::MAP_START])?;
+
         Ok(self)
     }
 
@@ -238,28 +265,30 @@ impl<'a> ser::Serializer for &'a mut Serializer {
         variant: &'static str,
         _len: usize,
     ) -> Result<Self::SerializeStructVariant> {
-        self.output += "d";
+        self.data.write(&[token::MAP_START])?;
+
         variant.serialize(&mut *self)?;
-        self.output += "d";
+
+        self.data.write(&[token::MAP_START])?;
+
         Ok(self)
     }
 }
 
 impl<'a> ser::SerializeSeq for &'a mut Serializer {
-    // Must match the `Ok` type of the serializer.
     type Ok = ();
-    // Must match the `Error` type of the serializer.
     type Error = Error;
 
     fn serialize_element<T>(&mut self, value: &T) -> Result<()>
     where
-        T: ?Sized + Serialize,
+        T: ?Sized + ser::Serialize,
     {
         value.serialize(&mut **self)
     }
 
     fn end(self) -> Result<()> {
-        self.output += "e";
+        self.data.write(&[token::END])?;
+
         Ok(())
     }
 }
@@ -270,13 +299,14 @@ impl<'a> ser::SerializeTuple for &'a mut Serializer {
 
     fn serialize_element<T>(&mut self, value: &T) -> Result<()>
     where
-        T: ?Sized + Serialize,
+        T: ?Sized + ser::Serialize,
     {
         value.serialize(&mut **self)
     }
 
     fn end(self) -> Result<()> {
-        self.output += "e";
+        self.data.write(&[token::END])?;
+
         Ok(())
     }
 }
@@ -287,13 +317,14 @@ impl<'a> ser::SerializeTupleStruct for &'a mut Serializer {
 
     fn serialize_field<T>(&mut self, value: &T) -> Result<()>
     where
-        T: ?Sized + Serialize,
+        T: ?Sized + ser::Serialize,
     {
         value.serialize(&mut **self)
     }
 
     fn end(self) -> Result<()> {
-        self.output += "e";
+        self.data.write(&[token::END])?;
+
         Ok(())
     }
 }
@@ -304,14 +335,16 @@ impl<'a> ser::SerializeTupleVariant for &'a mut Serializer {
 
     fn serialize_field<T>(&mut self, value: &T) -> Result<()>
     where
-        T: ?Sized + Serialize,
+        T: ?Sized + ser::Serialize,
     {
         value.serialize(&mut **self)
     }
 
-    // Responsible for closing both the dictionary & list.
     fn end(self) -> Result<()> {
-        self.output += "ee";
+        // Responsible for closing both the dictionary & list.
+        self.data.write(&[token::END])?;
+        self.data.write(&[token::END])?;
+
         Ok(())
     }
 }
@@ -333,7 +366,7 @@ impl<'a> ser::SerializeMap for &'a mut Serializer {
     /// implement `serialize_str` and return an error on any other data type.
     fn serialize_key<T>(&mut self, key: &T) -> Result<()>
     where
-        T: ?Sized + Serialize,
+        T: ?Sized + ser::Serialize,
     {
         // TODO: Make sure that keys are strings.
         key.serialize(&mut **self)
@@ -341,13 +374,14 @@ impl<'a> ser::SerializeMap for &'a mut Serializer {
 
     fn serialize_value<T>(&mut self, value: &T) -> Result<()>
     where
-        T: ?Sized + Serialize,
+        T: ?Sized + ser::Serialize,
     {
         value.serialize(&mut **self)
     }
 
     fn end(self) -> Result<()> {
-        self.output += "e";
+        self.data.write(&[token::END])?;
+
         Ok(())
     }
 }
@@ -360,14 +394,15 @@ impl<'a> ser::SerializeStruct for &'a mut Serializer {
 
     fn serialize_field<T>(&mut self, key: &'static str, value: &T) -> Result<()>
     where
-        T: ?Sized + Serialize,
+        T: ?Sized + ser::Serialize,
     {
         key.serialize(&mut **self)?;
         value.serialize(&mut **self)
     }
 
     fn end(self) -> Result<()> {
-        self.output += "e";
+        self.data.write(&[token::END])?;
+
         Ok(())
     }
 }
@@ -380,14 +415,16 @@ impl<'a> ser::SerializeStructVariant for &'a mut Serializer {
 
     fn serialize_field<T>(&mut self, key: &'static str, value: &T) -> Result<()>
     where
-        T: ?Sized + Serialize,
+        T: ?Sized + ser::Serialize,
     {
         key.serialize(&mut **self)?;
         value.serialize(&mut **self)
     }
 
     fn end(self) -> Result<()> {
-        self.output += "ee";
+        self.data.write(&[token::END])?;
+        self.data.write(&[token::END])?;
+
         Ok(())
     }
 }
