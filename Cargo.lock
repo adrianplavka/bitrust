@@ -12,6 +12,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "arbitrary"
+version = "1.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e2d098ff73c1ca148721f37baad5ea6a465a13f9573aba8641fbbbae8164a54e"
+
+[[package]]
 name = "autocfg"
 version = "0.1.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -21,11 +27,13 @@ checksum = "1d49d90015b3c36167a20fe2810c5cd875ad504b39cff3d4eae7977e6b7c1cb2"
 name = "bitrust_bencode"
 version = "0.1.0"
 dependencies = [
+ "arbitrary",
  "lexical",
  "nom",
  "num-traits",
  "quickcheck",
  "quickcheck_macros",
+ "rand",
  "serde",
  "serde_bytes",
  "serde_derive",

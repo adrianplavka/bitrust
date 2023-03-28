@@ -14,7 +14,9 @@ serde = "1"
 thiserror = "1"
 
 [dev-dependencies]
+arbitrary = "1"
 serde_derive = "1"
 serde_bytes = "0"
+rand = "0"
 quickcheck = "0.9.2"
 quickcheck_macros = "0.9.1"
