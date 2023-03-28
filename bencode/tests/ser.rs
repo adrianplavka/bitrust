@@ -1,22 +1,31 @@
 #[cfg(test)]
-mod ser {
-    extern crate bitrust_bencode;
-
-    use bitrust_bencode::to_string;
+mod tests {
+    use nom::AsBytes;
+    use quickcheck_macros::quickcheck;
     use serde_derive::Serialize;
 
-    #[test]
-    fn integers() {
-        assert_eq!("i0e", to_string(&0usize).unwrap());
-        assert_eq!("i0e", to_string(&0isize).unwrap());
-        assert_eq!("i1e", to_string(&1usize).unwrap());
-        assert_eq!("i1e", to_string(&1isize).unwrap());
-        assert_eq!("i123e", to_string(&123usize).unwrap());
-        assert_eq!("i123e", to_string(&123isize).unwrap());
-        assert_eq!("i0e", to_string(&-0).unwrap());
-        assert_eq!("i-1e", to_string(&-1).unwrap());
-        assert_eq!("i-123e", to_string(&-123).unwrap());
+    use bitrust_bencode::{to_string, to_vec};
+
+    macro_rules! integer_test {
+        ($method: ident, $type:ty) => {
+            #[quickcheck]
+            fn $method(value: $type) {
+                assert_eq!(format!("i{}e", value), to_string(&value).unwrap())
+            }
+        };
     }
+
+    integer_test!(u8_integers, u8);
+    integer_test!(u16_integers, u16);
+    integer_test!(u32_integers, u32);
+    integer_test!(u64_integers, u64);
+    integer_test!(usize_integers, usize);
+
+    integer_test!(i8_integers, i8);
+    integer_test!(i16_integers, i16);
+    integer_test!(i32_integers, i32);
+    integer_test!(i64_integers, i64);
+    integer_test!(isize_integers, isize);
 
     #[test]
     fn integers_near_bounds() {
@@ -67,22 +76,37 @@ mod ser {
         assert_eq!("5:false", to_string(&false).unwrap());
     }
 
-    #[test]
-    fn strings() {
-        assert_eq!("3:key", to_string(&"key").unwrap());
-        assert_eq!("5:asdfg", to_string(&"asdfg").unwrap());
-        assert_eq!("4:0087", to_string(&"0087").unwrap());
-        assert_eq!("0:", to_string(&"").unwrap());
-        assert_eq!("2:  ", to_string(&"  ").unwrap());
-        assert_eq!("6:❤️", to_string(&"❤️").unwrap());
+    #[quickcheck]
+    fn strings(value: String) {
         assert_eq!(
-            r#"21:!@#$%^&*()_+{}|:<>?"/"#,
-            to_string(&"!@#$%^&*()_+{}|:<>?\"/").unwrap()
+            format!("{}:{}", value.len(), value),
+            to_string(&value).unwrap()
         );
+    }
+
+    macro_rules! float_test {
+        ($method: ident, $type:ty) => {
+            #[quickcheck]
+            fn $method(value: $type) {
+                assert_eq!(
+                    format!("{}:{}", value.to_string().len(), value),
+                    to_string(&value).unwrap()
+                )
+            }
+        };
+    }
+
+    float_test!(f32_float, f32);
+    float_test!(f64_float, f64);
+
+    #[quickcheck]
+    fn bytes(value: String) {
         assert_eq!(
-            r#"28:KR�/[W+x/^nAkW��;T0"#,
-            to_string(&r#"KR�/[W+x/^nAkW��;T0"#).unwrap()
-        );
+            format!("{}:{}", value.len(), value).as_bytes(),
+            to_vec(&serde_bytes::Bytes::new(&value.as_bytes()))
+                .unwrap()
+                .as_bytes()
+        )
     }
 
     #[test]

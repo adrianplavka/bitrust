@@ -192,6 +192,14 @@ impl<'a> Deserializer<'a> {
 
         Ok(float)
     }
+
+    fn parse_bool(&mut self) -> Result<bool> {
+        match self.parse_string()? {
+            "true" => Ok(true),
+            "false" => Ok(false),
+            _ => Err(Error::UnknownType),
+        }
+    }
 }
 
 //////////////////////////////////////////////////////
@@ -298,6 +306,13 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
         visitor.visit_f64(self.parse_float::<f64>()?)
     }
 
+    fn deserialize_bool<V>(self, visitor: V) -> Result<V::Value>
+    where
+        V: de::Visitor<'de>,
+    {
+        visitor.visit_bool(self.parse_bool()?)
+    }
+
     fn deserialize_bytes<V>(self, visitor: V) -> Result<V::Value>
     where
         V: de::Visitor<'de>,
@@ -378,7 +393,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
     }
 
     serde::forward_to_deserialize_any! {
-        bool char
+        char
         unit unit_struct option
         enum newtype_struct
     }

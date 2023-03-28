@@ -1,24 +1,33 @@
 #[cfg(test)]
-mod de {
-    extern crate bitrust_bencode;
-
-    use bitrust_bencode::{from_slice, from_str, Error};
+mod tests {
+    use quickcheck_macros::quickcheck;
     use serde_derive::Deserialize;
 
-    #[test]
-    fn integers() {
-        // Happy paths.
-        assert_eq!(0usize, from_str(r#"i0e"#).unwrap());
-        assert_eq!(0isize, from_str(r#"i0e"#).unwrap());
-        assert_eq!(1usize, from_str(r#"i1e"#).unwrap());
-        assert_eq!(1isize, from_str(r#"i1e"#).unwrap());
-        assert_eq!(123usize, from_str(r#"i123e"#).unwrap());
-        assert_eq!(123isize, from_str(r#"i123e"#).unwrap());
-        assert_eq!(0, from_str(r#"i-0e"#).unwrap());
-        assert_eq!(-1, from_str(r#"i-1e"#).unwrap());
-        assert_eq!(-123, from_str(r#"i-123e"#).unwrap());
+    use bitrust_bencode::{from_slice, from_str, Error};
 
-        // Unhappy paths.
+    macro_rules! integer_test {
+        ($method: ident, $type:ty) => {
+            #[quickcheck]
+            fn $method(value: $type) {
+                assert_eq!(value, from_str(&format!("i{}e", value)).unwrap())
+            }
+        };
+    }
+
+    integer_test!(u8_integers, u8);
+    integer_test!(u16_integers, u16);
+    integer_test!(u32_integers, u32);
+    integer_test!(u64_integers, u64);
+    integer_test!(usize_integers, usize);
+
+    integer_test!(i8_integers, i8);
+    integer_test!(i16_integers, i16);
+    integer_test!(i32_integers, i32);
+    integer_test!(i64_integers, i64);
+    integer_test!(isize_integers, isize);
+
+    #[test]
+    fn integers_edge_cases() {
         assert!(matches!(
             from_str::<usize>(r#"ie"#),
             Err(Error::ExpectedUnsignedNumber)
@@ -158,25 +167,22 @@ mod de {
         ));
     }
 
-    #[test]
-    fn strings() {
-        // Happy paths.
-        assert_eq!("key", from_str::<&str>(r#"3:key"#).unwrap());
-        assert_eq!("asdfg", from_str::<&str>(r#"5:asdfg"#).unwrap());
-        assert_eq!("0087", from_str::<&str>(r#"4:0087"#).unwrap());
-        assert_eq!("", from_str::<&str>(r#"0:"#).unwrap());
-        assert_eq!("  ", from_str::<&str>(r#"2:  "#).unwrap());
-        assert_eq!("❤️", from_str::<&str>(r#"6:❤️"#).unwrap());
+    #[quickcheck]
+    fn strings(value: String) {
         assert_eq!(
-            "!@#$%^&*()_+{}|:<>?\"/",
-            from_str::<&str>(r#"21:!@#$%^&*()_+{}|:<>?"/"#).unwrap()
+            value,
+            from_str::<&str>(&format!("{}:{}", value.len(), value)).unwrap()
         );
-        assert_eq!(
-            r#"KR�/[W+x/^nAkW��;T0"#,
-            from_str::<&str>(r#"28:KR�/[W+x/^nAkW��;T0"#).unwrap()
-        );
+    }
 
-        // Unhappy paths.
+    #[test]
+    fn bools() {
+        assert_eq!(true, from_str::<bool>("4:true").unwrap());
+        assert_eq!(false, from_str::<bool>("5:false").unwrap());
+    }
+
+    #[test]
+    fn strings_edge_cases() {
         assert!(matches!(from_str::<&str>(r#"4:EOF"#), Err(Error::EOF)));
 
         assert!(matches!(
@@ -210,16 +216,23 @@ mod de {
         ));
     }
 
-    #[test]
-    fn floats() {
-        // Happy paths.
-        assert_eq!(4.32, from_str::<f32>(r#"4:4.32"#).unwrap());
-        assert_eq!(134.64, from_str::<f64>(r#"6:134.64"#).unwrap());
-        assert_eq!(-134.64, from_str::<f64>(r#"7:-134.64"#).unwrap());
-        assert_eq!(-0.0, from_str::<f64>(r#"4:-0.0"#).unwrap());
-        assert_eq!(-5032.0, from_str::<f64>(r#"5:-5032"#).unwrap());
+    macro_rules! float_test {
+        ($method: ident, $type:ty) => {
+            #[quickcheck]
+            fn $method(value: $type) {
+                assert_eq!(
+                    value,
+                    from_str(&format!("{}:{}", value.to_string().len(), value)).unwrap()
+                )
+            }
+        };
+    }
 
-        // Unhappy paths.
+    float_test!(f32_floats, f32);
+    float_test!(f64_floats, f64);
+
+    #[test]
+    fn floats_edge_cases() {
         assert!(matches!(
             from_str::<f64>(r#"7:invalid"#),
             Err(Error::ExpectedFloat)
@@ -236,10 +249,16 @@ mod de {
         ));
     }
 
-    #[test]
-    fn bytes() {
-        // Happy paths.
+    #[quickcheck]
+    fn bytes(value: String) {
+        assert_eq!(
+            value.as_bytes(),
+            from_slice::<&[u8]>(format!("{}:{}", value.len(), value).as_bytes()).unwrap()
+        );
+    }
 
+    #[test]
+    fn bytes_edge_cases() {
         // Check for a valid conversion from byte slice.
         // This sequence would translate to: `6:He?llo`.
         //
@@ -249,8 +268,6 @@ mod de {
             &[0x48, 0x65, 0xf0, 0x6c, 0x6c, 0x6f],
             from_slice::<&[u8]>(&[0x36, 0x3a, 0x48, 0x65, 0xf0, 0x6c, 0x6c, 0x6f]).unwrap()
         );
-
-        // Unhappy paths.
 
         // Check for an invalid conversion from byte slice to an UTF-8 `&str`.
         // This sequence would translate to: `6:He?llo`.

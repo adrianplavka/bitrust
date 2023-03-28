@@ -16,7 +16,7 @@ pub struct Serializer {
 
 impl Serializer {
     pub fn new() -> Self {
-        Serializer { data: Vec::new() }
+        Self { data: Vec::new() }
     }
 }
 
@@ -95,11 +95,7 @@ impl<'a> ser::Serializer for &'a mut Serializer {
     }
 
     fn serialize_str(self, value: &str) -> Result<()> {
-        self.data.write(value.len().to_string().as_bytes())?;
-        self.data.write(&[token::BYTES_DELIMITER])?;
-        self.data.write(value.as_bytes())?;
-
-        Ok(())
+        self.serialize_bytes(value.as_bytes())
     }
 
     fn serialize_bool(self, value: bool) -> Result<()> {
@@ -119,6 +115,8 @@ impl<'a> ser::Serializer for &'a mut Serializer {
     }
 
     fn serialize_bytes(self, value: &[u8]) -> Result<()> {
+        self.data.write(value.len().to_string().as_bytes())?;
+        self.data.write(&[token::BYTES_DELIMITER])?;
         self.data.write(value)?;
 
         Ok(())
@@ -128,11 +126,6 @@ impl<'a> ser::Serializer for &'a mut Serializer {
         Ok(())
     }
 
-    /// A present optional is represented as just the contained value. Note that
-    /// this is a lossy representation. For example the values `Some(())` and
-    /// `None` both serialize as just `null`. Unfortunately this is typically
-    /// what people expect when working with JSON. Other formats are encouraged
-    /// to behave more intelligently if possible.
     fn serialize_some<T>(self, value: &T) -> Result<()>
     where
         T: ?Sized + ser::Serialize,
@@ -144,16 +137,10 @@ impl<'a> ser::Serializer for &'a mut Serializer {
         Ok(())
     }
 
-    /// Unit struct means a named value containing no data. Again, since there is
-    /// no data. There is no need to serialize the name in most formats.
     fn serialize_unit_struct(self, _name: &'static str) -> Result<()> {
         self.serialize_unit()
     }
 
-    /// When serializing a unit variant (or any other kind of variant), formats
-    /// can choose whether to keep track of it by index or by name. Binary
-    /// formats typically use the index of the variant and human-readable formats
-    /// typically use the name.
     fn serialize_unit_variant(
         self,
         _name: &'static str,
@@ -163,8 +150,6 @@ impl<'a> ser::Serializer for &'a mut Serializer {
         self.serialize_str(variant)
     }
 
-    /// As is done here, serializers are encouraged to treat newtype structs as
-    /// insignificant wrappers around the data they contain.
     fn serialize_newtype_struct<T>(self, _name: &'static str, value: &T) -> Result<()>
     where
         T: ?Sized + ser::Serialize,
@@ -207,10 +192,6 @@ impl<'a> ser::Serializer for &'a mut Serializer {
         Ok(self)
     }
 
-    /// Tuples look just like sequences in Bencode. Some formats may be able to
-    /// represent tuples more efficiently by omitting the length, since tuple
-    /// means that the corresponding `Deserialize` implementation will know the
-    /// length without needing to look at the serialized data.
     fn serialize_tuple(self, len: usize) -> Result<Self::SerializeTuple> {
         self.serialize_seq(Some(len))
     }
